@@ -16,17 +16,13 @@ package cmd
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"ghealth/pkg/auth"
-	"ghealth/pkg/client"
-	"ghealth/pkg/config"
 	"github.com/spf13/cobra"
 )
 
@@ -160,343 +156,97 @@ func promptInput(reader *bufio.Reader, prompt, defaultVal string) string {
 }
 
 // ─── Setup wizard ────────────────────────────────────────────────
+//
+// runSetup orchestrates the wizard's six steps (see setup_steps.go); it holds
+// no logic of its own beyond sequencing and threading state (projectID,
+// selectedScopes, email, pendingAuthURL) between steps.
 
 func runSetup(cmd *cobra.Command, args []string) error {
-	// --instructions: deliberate discovery path for agents. Emits the same
-	// next_steps that auth errors would emit, on stdout, with exit 0.
+	// --instructions: deliberate discovery path for agents, handled before
+	// anything else touches stdin/output.
 	if setupInstructions {
-		result := map[string]interface{}{
-			"status":             "instructions",
-			"message":            auth.ClientSecretSetupMessage + " (or none yet); follow next_steps to obtain one.",
-			"next_steps":         auth.ClientSecretSetupSteps(),
-			"client_secret_path": config.ClientSecretPath(),
-			"docs":               "https://console.cloud.google.com/apis/credentials",
-			"oauth_client_type":  "Desktop app",
-			"complete_command":   "ghealth setup --client-secret /path/to/client_secret.json",
-		}
-		data, _ := json.MarshalIndent(result, "", "  ")
-		fmt.Fprintln(setupStdout, string(data))
-		return nil
+		return printSetupInstructions()
 	}
 
 	reader := bufio.NewReader(setupStdin)
-	totalSteps := 6
+	printSetupBanner()
 
-	fmt.Fprintf(setupStderr, "\n  %sghealth Setup%s\n", bold, reset)
-	fmt.Fprintf(setupStderr, "  %s%s%s\n", dim, "Configure GCP project, OAuth credentials, and authenticate", reset)
-	blank()
-
-	// ─── Step 1: GCP Project ID ──────────────────────────────────
-
-	header(1, totalSteps, "GCP Project")
-	projectID := setupProjectID
-	if projectID == "" {
-		if setupNoPrompt {
-			return client.NewValidationError("--no-prompt set but no --project-id provided", "Pass --project-id <id> or run setup interactively")
-		}
-		info("You need a Google Cloud project with the Health API enabled.")
-		info(fmt.Sprintf("Create one at: %shttps://console.cloud.google.com/projectcreate%s", cyan, reset))
-		blank()
-		projectID = promptInput(reader, "GCP project ID", "")
-		if projectID == "" {
-			return client.NewValidationError("project ID is required", "Create a project at https://console.cloud.google.com/projectcreate")
-		}
-	}
-	success(fmt.Sprintf("Project: %s%s%s", bold, projectID, reset))
-
-	// ─── Step 2: OAuth credentials ───────────────────────────────
-
-	header(2, totalSteps, "OAuth Credentials")
-	secretPath := setupClientSecret
-	useExistingSecret := false
-	if secretPath == "" {
-		if setupNoPrompt {
-			// A previously-installed client_secret satisfies this step; only a
-			// truly missing one is the documented bootstrap state (config, exit
-			// 5, with next_steps) — not a validation error.
-			if !auth.HasClientSecret() {
-				return noClientSecretError()
-			}
-			useExistingSecret = true
-		}
-	}
-	if secretPath == "" && !useExistingSecret {
-		info("Create OAuth credentials in your GCP project:")
-		blank()
-		fmt.Fprintf(setupStderr, "  %s1.%s Open %s%shttps://console.cloud.google.com/apis/credentials?project=%s%s\n", bold, reset, cyan, dim, projectID, reset)
-		fmt.Fprintf(setupStderr, "  %s2.%s Click %sCreate Credentials%s > %sOAuth client ID%s\n", bold, reset, bold, reset, bold, reset)
-		fmt.Fprintf(setupStderr, "  %s3.%s Application type: %sDesktop app%s\n", bold, reset, bold, reset)
-		fmt.Fprintf(setupStderr, "  %s4.%s Download the JSON file\n", bold, reset)
-		blank()
-		secretPath = promptInput(reader, "Path to downloaded client_secret JSON", "")
-		if secretPath == "" {
-			return client.NewValidationError("client secret file path is required", "Download the OAuth client secret JSON from the GCP Console")
-		}
-	}
-
-	if useExistingSecret {
-		success(fmt.Sprintf("Using existing client secret at %s%s%s", dim, config.ClientSecretPath(), reset))
-	} else {
-		if strings.HasPrefix(secretPath, "~/") {
-			home, _ := os.UserHomeDir()
-			secretPath = filepath.Join(home, secretPath[2:])
-		}
-
-		srcData, err := os.ReadFile(secretPath)
-		if err != nil {
-			return client.NewValidationError(fmt.Sprintf("cannot read file: %v", err), "Check the file path and try again")
-		}
-
-		destPath := config.ClientSecretPath()
-		if err := auth.WriteSecretFile(destPath, srcData); err != nil {
-			return client.NewConfigError(fmt.Sprintf("failed to copy client secret: %v", err), "")
-		}
-		success(fmt.Sprintf("Credentials saved to %s%s%s", dim, destPath, reset))
-	}
-
-	// ─── Step 3: Enable Health API ───────────────────────────────
-
-	header(3, totalSteps, "Enable Health API")
-
-	switch {
-	case setupSkipEnable:
-		info("--skip-enable-api set; assuming Health API is already enabled")
-	default:
-		if _, err := exec.LookPath("gcloud"); err == nil {
-			info("Found gcloud, enabling Health API...")
-			enableCmd := exec.Command("gcloud", "services", "enable", "health.googleapis.com", "--project", projectID)
-			enableCmd.Stderr = setupStderr
-			if err := enableCmd.Run(); err != nil {
-				warn(fmt.Sprintf("Could not enable via gcloud: %v", err))
-				info(fmt.Sprintf("Enable manually: %shttps://console.cloud.google.com/apis/api/health.googleapis.com?project=%s%s", cyan, projectID, reset))
-				if !setupNoPrompt {
-					blank()
-					promptInput(reader, "Press Enter when done", "")
-				}
-			} else {
-				success("Health API enabled")
-			}
-		} else {
-			info("gcloud not found. Enable the Health API manually:")
-			info(fmt.Sprintf("%shttps://console.cloud.google.com/apis/api/health.googleapis.com?project=%s%s", cyan, projectID, reset))
-			if setupNoPrompt {
-				warn("--no-prompt set; continuing without confirmation (re-run with --skip-enable-api to silence this)")
-			} else {
-				blank()
-				promptInput(reader, "Press Enter when done", "")
-			}
-			success("Continuing")
-		}
-	}
-
-	// ─── Step 4: Scope selection ─────────────────────────────────
-
-	header(4, totalSteps, "Select Scopes")
-
-	var selectedScopes []string
-	switch {
-	case setupScopes != "":
-		for _, part := range strings.Split(setupScopes, ",") {
-			if s := strings.TrimSpace(part); s != "" {
-				selectedScopes = append(selectedScopes, s)
-			}
-		}
-		info(fmt.Sprintf("Using --scopes (%d scope%s)", len(selectedScopes), plural(len(selectedScopes))))
-	case setupScopesPreset != "":
-		preset, err := auth.ScopePreset(setupScopesPreset)
-		if err != nil {
-			return client.NewValidationError(err.Error(), "Try --scopes-preset readonly | all | <category,...>")
-		}
-		selectedScopes = preset
-		info(fmt.Sprintf("Using --scopes-preset %s (%d scope%s)", setupScopesPreset, len(selectedScopes), plural(len(selectedScopes))))
-	case setupNoPrompt:
-		preset, _ := auth.ScopePreset("readonly")
-		selectedScopes = preset
-		info(fmt.Sprintf("--no-prompt set; defaulting to readonly preset (%d scope%s)", len(selectedScopes), plural(len(selectedScopes))))
-	default:
-		info("Choose which health data categories to authorize.")
-		info(fmt.Sprintf("Default: %sall readonly scopes%s (recommended)", bold, reset))
-		blank()
-
-		type scopeOption struct {
-			scope auth.ScopeInfo
-		}
-		var readOnlyScopes []scopeOption
-		var readWriteScopes []scopeOption
-
-		for _, s := range auth.AllScopes {
-			if strings.HasSuffix(s.Suffix, ".readonly") {
-				readOnlyScopes = append(readOnlyScopes, scopeOption{scope: s})
-			} else {
-				readWriteScopes = append(readWriteScopes, scopeOption{scope: s})
-			}
-		}
-
-		fmt.Fprintf(setupStderr, "  %sRead-only scopes:%s\n", bold, reset)
-		for j, opt := range readOnlyScopes {
-			fmt.Fprintf(setupStderr, "    %s%2d.%s %s\n", green, j+1, reset, opt.scope.Label)
-		}
-		blank()
-		fmt.Fprintf(setupStderr, "  %sRead/write scopes:%s\n", bold, reset)
-		for j, opt := range readWriteScopes {
-			fmt.Fprintf(setupStderr, "    %s%2d.%s %s\n", yellow, j+len(readOnlyScopes)+1, reset, opt.scope.Label)
-		}
-		blank()
-
-		allOptions := append(readOnlyScopes, readWriteScopes...)
-
-		fmt.Fprintf(setupStderr, "  %sOptions:%s\n", dim, reset)
-		fmt.Fprintf(setupStderr, "    %sEnter%s     = All readonly scopes (recommended)\n", bold, reset)
-		fmt.Fprintf(setupStderr, "    %s*%s         = All data scopes (read + write; excludes cloud-platform)\n", bold, reset)
-		fmt.Fprintf(setupStderr, "    %s1,2,5%s     = Specific scope numbers\n", bold, reset)
-		blank()
-
-		scopeInput := promptInput(reader, "Select scopes", "")
-
-		switch strings.TrimSpace(scopeInput) {
-		case "", "default":
-			for _, opt := range readOnlyScopes {
-				selectedScopes = append(selectedScopes, opt.scope.Suffix)
-			}
-		case "*", "all":
-			selectedScopes, _ = auth.ScopePreset("all")
-		default:
-			for _, part := range strings.Split(scopeInput, ",") {
-				part = strings.TrimSpace(part)
-				var idx int
-				if _, err := fmt.Sscanf(part, "%d", &idx); err == nil && idx >= 1 && idx <= len(allOptions) {
-					selectedScopes = append(selectedScopes, allOptions[idx-1].scope.Suffix)
-				}
-			}
-			if len(selectedScopes) == 0 {
-				for _, opt := range readOnlyScopes {
-					selectedScopes = append(selectedScopes, opt.scope.Suffix)
-				}
-			}
-		}
-	}
-
-	blank()
-	fmt.Fprintf(setupStderr, "  %sSelected:%s\n", bold, reset)
-	for _, s := range selectedScopes {
-		label := s
-		for _, si := range auth.AllScopes {
-			if si.Suffix == s {
-				label = si.Label
-				break
-			}
-		}
-		fmt.Fprintf(setupStderr, "    %s %s\n", check, label)
-	}
-
-	// ─── Step 5: OAuth login ─────────────────────────────────────
-
-	header(5, totalSteps, "Authenticate")
-
-	cs, err := auth.LoadClientSecret()
+	projectID, err := setupStepProjectID(reader)
 	if err != nil {
-		return client.NewConfigError(err.Error(), "Check the client secret file")
+		return err
 	}
 
-	var email string
-	var pendingAuthURL string // populated when --non-interactive-auth; surfaced on stdout below
-	if setupNonInteractiveAuth {
-		authURL, _, err := setupDoNonInteractiveStart(cs, selectedScopes)
-		if err != nil {
-			return client.NewConfigError(err.Error(), "")
-		}
-		pendingAuthURL = authURL
-		info("Skipping browser login (--non-interactive-auth).")
-		info("Open this URL on any browser, authorize, then paste the redirected URL (or just the 'code' query parameter):")
-		fmt.Fprintf(setupStderr, "\n  %s\n\n", authURL)
-		info("Then run: ghealth auth login --complete <code-or-url>")
-	} else {
-		info("Opening browser for Google OAuth consent...")
-		blank()
-
-		tok, err := setupDoInteractiveLogin(cs, selectedScopes)
-		if err != nil {
-			return client.NewAuthError(fmt.Sprintf("login failed: %v", err), "Check your OAuth credentials and try again")
-		}
-
-		email = setupResolveUserEmail(tok.AccessToken)
-
-		creds := &auth.StoredCredentials{
-			AccessToken:  tok.AccessToken,
-			RefreshToken: tok.RefreshToken,
-			TokenType:    tok.TokenType,
-			Expiry:       tok.Expiry,
-			Scopes:       selectedScopes,
-			Email:        email,
-		}
-
-		if err := auth.SaveCredentials(creds); err != nil {
-			return client.NewConfigError(fmt.Sprintf("failed to save credentials: %v", err), "")
-		}
-
-		if email != "" {
-			success(fmt.Sprintf("Authenticated as %s%s%s", bold, email, reset))
-		} else {
-			success("Authenticated successfully")
-		}
+	if err := setupStepOAuthCredentials(reader, projectID); err != nil {
+		return err
 	}
 
-	// ─── Step 6: Save config ─────────────────────────────────────
+	setupStepEnableAPI(reader, projectID)
 
-	header(6, totalSteps, "Save Configuration")
-
-	cfg, err := config.Load()
+	selectedScopes, err := setupStepSelectScopes(reader)
 	if err != nil {
-		cfg = &config.Config{
-			Default:  config.ProfileConfig{},
-			Profiles: make(map[string]config.ProfileConfig),
-		}
+		return err
 	}
-	cfg.Default.ProjectID = projectID
-	cfg.Default.Scopes = selectedScopes
+	printSelectedScopes(selectedScopes)
 
-	if err := cfg.Save(); err != nil {
-		return client.NewConfigError(fmt.Sprintf("failed to save config: %v", err), "")
-	}
-	success(fmt.Sprintf("Config saved to %s%s%s", dim, config.ConfigPath(), reset))
-	if !setupNonInteractiveAuth {
-		success(fmt.Sprintf("Credentials saved to %s%s%s", dim, config.CredentialsPath(), reset))
+	email, pendingAuthURL, err := setupStepAuthenticate(selectedScopes)
+	if err != nil {
+		return err
 	}
 
-	// ─── Done ────────────────────────────────────────────────────
-
-	blank()
-	fmt.Fprintf(setupStderr, "  %s%s Setup Complete %s\n", bold, check, reset)
-	blank()
-	if !setupNonInteractiveAuth {
-		fmt.Fprintf(setupStderr, "  %sTry it out:%s\n", dim, reset)
-		fmt.Fprintf(setupStderr, "    %s$ ghealth data steps list --from 2026-03-28%s\n", cyan, reset)
-		fmt.Fprintf(setupStderr, "    %s$ ghealth data sleep list --from 2026-03-22%s\n", cyan, reset)
-		fmt.Fprintf(setupStderr, "    %s$ ghealth schema types%s\n", cyan, reset)
-		blank()
+	if err := setupStepSaveConfig(projectID, selectedScopes); err != nil {
+		return err
 	}
 
-	status := "setup_complete"
-	if setupNonInteractiveAuth {
-		status = "setup_pending_auth"
-	}
-	result := map[string]interface{}{
-		"status":             status,
-		"project_id":         projectID,
-		"email":              email,
-		"scopes":             selectedScopes,
-		"config_dir":         config.ConfigDir(),
-		"client_secret_path": config.ClientSecretPath(),
-		"credentials_path":   config.CredentialsPath(),
-	}
-	if setupNonInteractiveAuth {
-		// Surface everything an agent needs to finish the flow on stdout — the
-		// browser URL on stderr is for humans only and is not machine-readable.
-		result["auth_url"] = pendingAuthURL
-		result["complete_command"] = "ghealth auth login --complete <code-or-url>"
-		result["pending_auth_path"] = auth.PendingAuthPath()
-	}
-	data, _ := json.MarshalIndent(result, "", "  ")
-	fmt.Fprintln(setupStdout, string(data))
+	printSetupComplete(projectID, email, selectedScopes, pendingAuthURL)
 	return nil
+}
+
+// ─── Step 3: Enable Health API ─────────────────────────────────────
+//
+// Kept in this file (rather than setup_steps.go) so the existing
+// .golangci.yml gosec G204 exclusion for cmd/setup.go — "runs gcloud with
+// fixed arguments plus the user's own project ID; no shell involved" —
+// still applies without widening that exclusion's scope.
+
+func setupStepEnableAPI(reader *bufio.Reader, projectID string) {
+	header(3, setupTotalSteps, "Enable Health API")
+
+	if setupSkipEnable {
+		info("--skip-enable-api set; assuming Health API is already enabled")
+		return
+	}
+
+	if _, err := exec.LookPath("gcloud"); err != nil {
+		promptManualEnableAPI(reader, projectID)
+		return
+	}
+	enableHealthAPIViaGcloud(reader, projectID)
+}
+
+func enableHealthAPIViaGcloud(reader *bufio.Reader, projectID string) {
+	info("Found gcloud, enabling Health API...")
+	enableCmd := exec.Command("gcloud", "services", "enable", "health.googleapis.com", "--project", projectID)
+	enableCmd.Stderr = setupStderr
+	if err := enableCmd.Run(); err != nil {
+		warn(fmt.Sprintf("Could not enable via gcloud: %v", err))
+		info(fmt.Sprintf("Enable manually: %shttps://console.cloud.google.com/apis/api/health.googleapis.com?project=%s%s", cyan, projectID, reset))
+		if !setupNoPrompt {
+			blank()
+			promptInput(reader, "Press Enter when done", "")
+		}
+		return
+	}
+	success("Health API enabled")
+}
+
+func promptManualEnableAPI(reader *bufio.Reader, projectID string) {
+	info("gcloud not found. Enable the Health API manually:")
+	info(fmt.Sprintf("%shttps://console.cloud.google.com/apis/api/health.googleapis.com?project=%s%s", cyan, projectID, reset))
+	if setupNoPrompt {
+		warn("--no-prompt set; continuing without confirmation (re-run with --skip-enable-api to silence this)")
+	} else {
+		blank()
+		promptInput(reader, "Press Enter when done", "")
+	}
+	success("Continuing")
 }

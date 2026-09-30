@@ -204,7 +204,7 @@ func TestSetupChar_ProjectID_NoPromptMissing(t *testing.T) {
 	setupNoPrompt = true
 
 	_, _, err := setupCharRun(t, "")
-	setupCharCLIError(t, err, "validation", client.ExitValidation,
+	_ = setupCharCLIError(t, err, "validation", client.ExitValidation,
 		"--no-prompt set but no --project-id provided",
 		"Pass --project-id <id> or run setup interactively")
 }
@@ -214,7 +214,7 @@ func TestSetupChar_ProjectID_PromptEmpty(t *testing.T) {
 	setupCharConfigDir(t)
 
 	_, _, err := setupCharRun(t, "\n")
-	setupCharCLIError(t, err, "validation", client.ExitValidation,
+	_ = setupCharCLIError(t, err, "validation", client.ExitValidation,
 		"project ID is required",
 		"Create a project at https://console.cloud.google.com/projectcreate")
 }
@@ -259,7 +259,7 @@ func TestSetupChar_ClientSecret_MissingFile(t *testing.T) {
 	_, wantReadErr := os.ReadFile(missing)
 
 	_, _, err := setupCharRun(t, "")
-	setupCharCLIError(t, err, "validation", client.ExitValidation,
+	_ = setupCharCLIError(t, err, "validation", client.ExitValidation,
 		"cannot read file: "+wantReadErr.Error(),
 		"Check the file path and try again")
 }
@@ -418,6 +418,52 @@ func TestSetupChar_ClientSecret_TildeExpansion(t *testing.T) {
 	if string(got) != setupCharValidClientSecretJSON {
 		t.Errorf("dest content = %s, want tilde-expanded source content", got)
 	}
+}
+
+func TestSetupChar_ClientSecret_InteractivePrompt(t *testing.T) {
+	dir := setupCharConfigDir(t)
+	setupCharReset(t)
+	setupProjectID = "proj"
+	setupSkipEnable = true
+	setupScopes = "profile.readonly"
+	setupNonInteractiveAuth = true
+	setupCharFakeNonInteractiveStart("https://accounts.google.com/fake-auth-url", nil)
+
+	src := setupCharWriteFile(t, "client_secret.json", setupCharValidClientSecretJSON)
+	// setupClientSecret left empty: the wizard must print the numbered
+	// instructions and prompt for a path on stdin.
+
+	stdout, stderr, err := setupCharRun(t, src+"\n")
+	if err != nil {
+		t.Fatalf("runSetup error: %v\nstderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stderr, "Create OAuth credentials in your GCP project:") {
+		t.Errorf("stderr missing prompt instructions: %q", stderr)
+	}
+	if !strings.Contains(stderr, "Application type: ") {
+		t.Errorf("stderr missing numbered instructions: %q", stderr)
+	}
+	if !strings.Contains(stdout, "setup_pending_auth") {
+		t.Errorf("stdout missing setup_pending_auth: %s", stdout)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "client_secret.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(dest): %v", err)
+	}
+	if string(got) != setupCharValidClientSecretJSON {
+		t.Errorf("dest content = %s, want the prompted source content", got)
+	}
+}
+
+func TestSetupChar_ClientSecret_InteractivePromptEmptyFails(t *testing.T) {
+	setupCharConfigDir(t)
+	setupCharReset(t)
+	setupProjectID = "proj"
+
+	_, _, err := setupCharRun(t, "\n")
+	_ = setupCharCLIError(t, err, "validation", client.ExitValidation,
+		"client secret file path is required",
+		"Download the OAuth client secret JSON from the GCP Console")
 }
 
 // ─── Step 3: Enable Health API ────────────────────────────────────
@@ -704,8 +750,35 @@ func TestSetupChar_ScopeSelection_PresetInvalid(t *testing.T) {
 	if presetErr == nil {
 		t.Fatalf("test setup: ScopePreset(no-such-category) unexpectedly succeeded: %v", wantErr)
 	}
-	setupCharCLIError(t, err, "validation", client.ExitValidation,
+	_ = setupCharCLIError(t, err, "validation", client.ExitValidation,
 		presetErr.Error(), "Try --scopes-preset readonly | all | <category,...>")
+}
+
+func TestSetupChar_ScopeSelection_NoPromptDefaultsToReadonly(t *testing.T) {
+	setupCharConfigDir(t)
+	setupCharReset(t)
+	setupProjectID = "proj"
+	secretPath := setupCharWriteFile(t, "client_secret.json", setupCharValidClientSecretJSON)
+	setupClientSecret = secretPath
+	setupSkipEnable = true
+	setupNoPrompt = true
+	setupNonInteractiveAuth = true
+	setupCharFakeNonInteractiveStart("https://accounts.google.com/fake-auth-url", nil)
+	// setupScopes and setupScopesPreset left empty: --no-prompt must default
+	// to the readonly preset without prompting.
+
+	stdout, stderr, err := setupCharRun(t, "")
+	if err != nil {
+		t.Fatalf("runSetup error: %v\nstderr:\n%s", err, stderr)
+	}
+	if !strings.Contains(stderr, "--no-prompt set; defaulting to readonly preset") {
+		t.Errorf("stderr missing no-prompt default message: %q", stderr)
+	}
+	got := setupCharResultScopes(t, stdout)
+	want := setupCharReadonlyScopeSuffixes()
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("scopes = %v, want %v", got, want)
+	}
 }
 
 // ─── Step 5: OAuth login ──────────────────────────────────────────
@@ -724,7 +797,7 @@ func TestSetupChar_LoadClientSecret_InvalidJSON(t *testing.T) {
 	if wantErr == nil {
 		t.Fatalf("test setup: LoadClientSecret unexpectedly succeeded")
 	}
-	setupCharCLIError(t, err, "config", client.ExitConfigError,
+	_ = setupCharCLIError(t, err, "config", client.ExitConfigError,
 		wantErr.Error(), "Check the client secret file")
 }
 
@@ -740,7 +813,7 @@ func TestSetupChar_NonInteractiveAuth_StartFails(t *testing.T) {
 	setupCharFakeNonInteractiveStart("", errors.New("boom"))
 
 	_, _, err := setupCharRun(t, "")
-	setupCharCLIError(t, err, "config", client.ExitConfigError, "boom", "")
+	_ = setupCharCLIError(t, err, "config", client.ExitConfigError, "boom", "")
 }
 
 func TestSetupChar_NonInteractiveAuth_Success(t *testing.T) {
@@ -808,7 +881,7 @@ func TestSetupChar_InteractiveLogin_Fails(t *testing.T) {
 	setupCharFakeInteractiveLogin(nil, errors.New("network unreachable"))
 
 	_, _, err := setupCharRun(t, "")
-	setupCharCLIError(t, err, "auth", client.ExitAuthError,
+	_ = setupCharCLIError(t, err, "auth", client.ExitAuthError,
 		"login failed: network unreachable",
 		"Check your OAuth credentials and try again")
 }
