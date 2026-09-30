@@ -51,7 +51,7 @@ func assertValidationError(t *testing.T, err error, wantSubstrs ...string) {
 	if err == nil {
 		t.Fatal("expected a validation error, got nil")
 	}
-	cliErr, ok := err.(*client.CLIError)
+	cliErr, ok := client.AsCLIError(err)
 	if !ok {
 		t.Fatalf("got %T (%v), want *client.CLIError", err, err)
 	}

@@ -1,0 +1,28 @@
+# gitleaks configuration for google-health-cli.
+#
+# Extends the default rule set and excludes paths that are either build output
+# or known not to contain secrets. Run `gitleaks protect --staged` for a
+# commit-time scan (wired into .pre-commit-config.yaml) or `make secrets` for
+# a full-history scan.
+#
+# Reference: https://github.com/gitleaks/gitleaks#configuration
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Skip build output, reports, scanner state and binaries"
+paths = [
+  '''(^|/)dist/''',
+  '''(^|/)reports/''',
+  '''(^|/)\.scannerwork/''',
+  '''(^|/)ghealth$''',
+  '''(?i)\.(png|jpe?g|gif|pdf|zip|tar|gz|exe|bin)$''',
+]
+
+[[allowlists]]
+description = "scripts/*.sh: curl -u \"${VAR}:\" is a runtime shell variable expansion, never a literal secret"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(^|/)scripts/.*\.sh$''']
+regexes = ['''-u\s+"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?:"''']

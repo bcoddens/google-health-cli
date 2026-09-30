@@ -24,8 +24,9 @@ import (
 )
 
 const (
-	DefaultConfigDir = ".config/ghealth"
-	ConfigFileName   = "config.toml"
+	DefaultConfigDir   = ".config/ghealth"
+	ConfigFileName     = "config.toml"
+	defaultProfileName = "default"
 )
 
 type Config struct {
@@ -75,7 +76,7 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-func (c *Config) Save() error {
+func (c *Config) Save() (err error) {
 	path := ConfigPath()
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -86,7 +87,11 @@ func (c *Config) Save() error {
 	if err != nil {
 		return fmt.Errorf("failed to open config file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}()
 
 	return toml.NewEncoder(f).Encode(c)
 }
@@ -97,10 +102,10 @@ func (c *Config) ActiveProfile() ProfileConfig {
 		name = os.Getenv("GHEALTH_PROFILE")
 	}
 	if name == "" {
-		name = "default"
+		name = defaultProfileName
 	}
 
-	if name == "default" {
+	if name == defaultProfileName {
 		return c.Default
 	}
 
@@ -112,7 +117,7 @@ func (c *Config) ActiveProfile() ProfileConfig {
 }
 
 func (c *Config) SetProfile(name string, profile ProfileConfig) {
-	if name == "default" {
+	if name == defaultProfileName {
 		c.Default = profile
 	} else {
 		if c.Profiles == nil {

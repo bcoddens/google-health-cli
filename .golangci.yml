@@ -1,0 +1,82 @@
+# golangci-lint v2 configuration.
+# Run locally with `golangci-lint run ./...` (CI runs the same command).
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+issues:
+  # Report everything; the defaults hide repeats and cap per-linter output.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - errorlint
+    - gocognit
+    - goconst
+    - gosec
+    - misspell
+    - unconvert
+  settings:
+    errcheck:
+      # Best-effort output and cobra flag wiring: none of these can fail in a
+      # way the CLI could act on, and checking them would bury real errors.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*github.com/spf13/cobra.Command).MarkFlagRequired
+        - os.Unsetenv
+    gocognit:
+      min-complexity: 16
+    gosec:
+      excludes:
+        # Config/credential paths come from the user's own environment
+        # (GHEALTH_CONFIG_DIR, --output, --file), not from untrusted input.
+        - G304
+        # Unchecked errors are enforced by errcheck (with its own reviewed
+        # exclude list above); reporting them twice only duplicates noise.
+        - G104
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters:
+          - gocognit
+          - goconst
+          - gosec
+      # Each rule below is a reviewed false positive or deliberate design
+      # choice, scoped to the one place it applies so gosec stays active
+      # everywhere else.
+      - path: pkg/auth/auth\.go
+        linters: [gosec]
+        text: "G101" # OAuth endpoint URLs and setup-message constants, not secrets
+      - path: (pkg/auth/auth\.go|cmd/auth\.go)
+        linters: [gosec]
+        text: "G117" # credentials.json / `auth export` intentionally serialise tokens
+      - path: pkg/auth/auth\.go
+        linters: [gosec]
+        text: "G204" # openBrowser runs fixed binaries (open/rundll32/xdg-open) with the auth URL as an argument
+      - path: pkg/auth/auth\.go
+        linters: [gosec]
+        text: "G703" # GHEALTH_CREDENTIALS_FILE is the user's own environment, only stat'ed
+      - path: (cmd/data\.go|pkg/output/formatter\.go)
+        linters: [gosec]
+        text: "G306" # --output files are user-requested exports meant to be shared/read by other tools
+      - path: cmd/schema\.go
+        linters: [gosec]
+        text: "G101" # flag-description strings mentioning "token", not credentials
+      - path: cmd/setup\.go
+        linters: [gosec]
+        text: "G204" # runs gcloud with fixed arguments plus the user's own project ID; no shell involved
+
+formatters:
+  enable:
+    - gofmt

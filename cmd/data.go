@@ -30,6 +30,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Date/time layouts used to parse and format --from/--to values.
+const (
+	dateOnlyLayout      = "2006-01-02"
+	civilMidnightSuffix = "T00:00:00"
+	civilDateTimeLayout = "2006-01-02T15:04:05"
+)
+
+// idRequiredMsg is the validation error shown when a required --id flag is
+// missing. idFlagUsage is that flag's shared help text.
+const (
+	idRequiredMsg = "--id is required"
+	idFlagUsage   = "Data point ID (required)"
+)
+
 // listMaxPageSize is the largest pageSize the API accepts for a data type's
 // list, from the registry (exercise/sleep are capped at 25, others 10000).
 // Requesting more than the cap is rejected, so list pagination sizes pages
@@ -76,23 +90,23 @@ func newTypeCommand(dt *types.DataType) *cobra.Command {
 	}
 	for _, op := range dt.Operations {
 		switch op {
-		case "list":
+		case types.OpList:
 			cmd.AddCommand(newListCommand(dt))
-		case "get":
+		case types.OpGet:
 			cmd.AddCommand(newGetCommand(dt))
-		case "create":
+		case types.OpCreate:
 			cmd.AddCommand(newCreateCommand(dt))
-		case "update":
+		case types.OpUpdate:
 			cmd.AddCommand(newUpdateCommand(dt))
-		case "delete":
+		case types.OpDelete:
 			cmd.AddCommand(newDeleteCommand(dt))
-		case "rollup":
+		case types.OpRollup:
 			cmd.AddCommand(newRollupCommand(dt))
-		case "daily-rollup":
+		case types.OpDailyRollup:
 			cmd.AddCommand(newDailyRollupCommand(dt))
-		case "reconcile":
+		case types.OpReconcile:
 			cmd.AddCommand(newReconcileCommand(dt))
-		case "export-tcx":
+		case types.OpExportTCX:
 			cmd.AddCommand(newExportTCXCommand(dt))
 		}
 	}
@@ -104,17 +118,17 @@ func newTypeCommand(dt *types.DataType) *cobra.Command {
 func parseDate(s string) (string, error) {
 	switch strings.ToLower(s) {
 	case "today":
-		return time.Now().In(activeLocation()).Format("2006-01-02") + "T00:00:00", nil
+		return time.Now().In(activeLocation()).Format(dateOnlyLayout) + civilMidnightSuffix, nil
 	case "yesterday":
-		return time.Now().In(activeLocation()).AddDate(0, 0, -1).Format("2006-01-02") + "T00:00:00", nil
+		return time.Now().In(activeLocation()).AddDate(0, 0, -1).Format(dateOnlyLayout) + civilMidnightSuffix, nil
 	}
-	if _, err := time.Parse("2006-01-02", s); err == nil {
-		return s + "T00:00:00", nil
+	if _, err := time.Parse(dateOnlyLayout, s); err == nil {
+		return s + civilMidnightSuffix, nil
 	}
 	if _, err := time.Parse(time.RFC3339, s); err == nil {
 		return s, nil
 	}
-	if _, err := time.Parse("2006-01-02T15:04:05", s); err == nil {
+	if _, err := time.Parse(civilDateTimeLayout, s); err == nil {
 		return s, nil
 	}
 	return "", client.NewValidationError(
@@ -131,11 +145,11 @@ func parseCivilDate(s string) (map[string]interface{}, error) {
 		return nil, err
 	}
 	// Parse the date portion from the ISO-ish string
-	t, parseErr := time.Parse("2006-01-02", dateStr[:10])
+	t, parseErr := time.Parse(dateOnlyLayout, dateStr[:10])
 	if parseErr != nil {
 		t, parseErr = time.Parse(time.RFC3339, dateStr)
 		if parseErr != nil {
-			t, _ = time.Parse("2006-01-02T15:04:05", dateStr)
+			t, _ = time.Parse(civilDateTimeLayout, dateStr)
 		}
 	}
 	return map[string]interface{}{
@@ -201,10 +215,10 @@ func anchorLocalToUTC(s string) string {
 		return t.UTC().Format(time.RFC3339)
 	}
 	loc := activeLocation()
-	if t, err := time.ParseInLocation("2006-01-02T15:04:05", s, loc); err == nil {
+	if t, err := time.ParseInLocation(civilDateTimeLayout, s, loc); err == nil {
 		return t.UTC().Format(time.RFC3339)
 	}
-	if t, err := time.ParseInLocation("2006-01-02", s, loc); err == nil {
+	if t, err := time.ParseInLocation(dateOnlyLayout, s, loc); err == nil {
 		return t.UTC().Format(time.RFC3339)
 	}
 	return s // not a recognized shape; leave for downstream handling
@@ -245,18 +259,11 @@ func buildFilter(dt *types.DataType, from, to, rawFilter string) (string, error)
 	}
 	var parts []string
 	if from != "" {
-		parsed, err := parseDate(from)
+		f, err := buildBoundFilter(dt, "--from", from, parseDate, dt.FilterFrom)
 		if err != nil {
 			return "", err
 		}
-		// Physical-time fields compare against true UTC instants; anchor a bare
-		// date at the user's local day so it lines up with civil/interval types.
-		if usesPhysicalTime(dt.TimeField) {
-			parsed = anchorLocalToUTC(parsed)
-		} else if err := rejectZonedCivil(dt, "--from", from, parsed); err != nil {
-			return "", err
-		}
-		if f := dt.FilterFrom(parsed); f != "" {
+		if f != "" {
 			parts = append(parts, f)
 		}
 	}
@@ -265,20 +272,32 @@ func buildFilter(dt *types.DataType, from, to, rawFilter string) (string, error)
 			"warning: %s does not support end-time filtering; --to is ignored\n", dt.ID)
 	}
 	if to != "" {
-		parsed, err := parseEndDate(to)
+		f, err := buildBoundFilter(dt, "--to", to, parseEndDate, dt.FilterTo)
 		if err != nil {
 			return "", err
 		}
-		if usesPhysicalTime(dt.TimeField) {
-			parsed = anchorLocalToUTC(parsed)
-		} else if err := rejectZonedCivil(dt, "--to", to, parsed); err != nil {
-			return "", err
-		}
-		if f := dt.FilterTo(parsed); f != "" {
+		if f != "" {
 			parts = append(parts, f)
 		}
 	}
 	return strings.Join(parts, " AND "), nil
+}
+
+// buildBoundFilter parses a --from/--to value with parse and turns it into a
+// filter expression via filterFn (dt.FilterFrom or dt.FilterTo), anchoring
+// physical-time fields to UTC and rejecting a zoned timestamp against a
+// civil filter field.
+func buildBoundFilter(dt *types.DataType, flag, raw string, parse func(string) (string, error), filterFn func(string) string) (string, error) {
+	parsed, err := parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if usesPhysicalTime(dt.TimeField) {
+		parsed = anchorLocalToUTC(parsed)
+	} else if err := rejectZonedCivil(dt, flag, raw, parsed); err != nil {
+		return "", err
+	}
+	return filterFn(parsed), nil
 }
 
 // parseEndDate resolves a --to value into the exclusive upper bound consumed by
@@ -289,7 +308,7 @@ func buildFilter(dt *types.DataType, from, to, rawFilter string) (string, error)
 // precise bound and is passed through unchanged.
 func parseEndDate(s string) (string, error) {
 	if d, ok := bareDate(s); ok {
-		return d.AddDate(0, 0, 1).Format("2006-01-02") + "T00:00:00", nil
+		return d.AddDate(0, 0, 1).Format(dateOnlyLayout) + civilMidnightSuffix, nil
 	}
 	return parseDate(s)
 }
@@ -305,7 +324,7 @@ func bareDate(s string) (time.Time, bool) {
 		now := time.Now().In(activeLocation()).AddDate(0, 0, -1)
 		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC), true
 	}
-	if t, err := time.Parse("2006-01-02", s); err == nil {
+	if t, err := time.Parse(dateOnlyLayout, s); err == nil {
 		return t, true
 	}
 	return time.Time{}, false
@@ -323,15 +342,25 @@ func doDryRun(req *client.Request) error {
 }
 
 func doRequest(req *client.Request) error {
-	c := newClient()
-	resp, err := c.Do(req)
+	resp, err := doAPICall(newClient(), req)
 	if err != nil {
-		if cliErr, ok := err.(*client.CLIError); ok {
-			return cliErr
-		}
-		return client.NewAPIError(0, err.Error(), "")
+		return err
 	}
 	return printOutput(resp.Body)
+}
+
+// doAPICall executes req and classifies any error into a *client.CLIError —
+// the client.AsCLIError-or-NewAPIError fallback shared by every request path
+// (list pagination, rollup pagination, plain writes, TCX export).
+func doAPICall(c *client.Client, req *client.Request) (*client.Response, error) {
+	resp, err := c.Do(req)
+	if err != nil {
+		if cliErr, ok := client.AsCLIError(err); ok {
+			return nil, cliErr
+		}
+		return nil, client.NewAPIError(0, err.Error(), "")
+	}
+	return resp, nil
 }
 
 // printOutput routes to file or stdout based on --output flag.
@@ -412,36 +441,54 @@ func limitTruncated(fetched, limit int, remainingToken string) bool {
 // executeDataList fetches data with auto-pagination, simplifies, and injects hints.
 // It merges all pages into a single response and caps at opts.limit total results.
 func executeDataList(req *client.Request, opts dataListOpts) error {
-	c := newClient()
-	totalLimit := opts.limit
-	if totalLimit <= 0 {
-		totalLimit = 500 // sensible default cap
+	totalLimit := effectiveListLimit(opts.limit)
+	allPoints, remainingToken, err := collectPages(
+		totalLimit,
+		listPageCap,
+		opts.pageToken,
+		newListPageFetcher(newClient(), req, listMaxPageSize(opts.dataType)),
+	)
+	if err != nil {
+		return err
 	}
 
-	maxPage := listMaxPageSize(opts.dataType)
-	fetchPage := func(pageToken string, want int) ([]json.RawMessage, string, error) {
+	fetched := len(allPoints)
+	truncated := limitTruncated(fetched, totalLimit, remainingToken)
+	if fetched > totalLimit {
+		allPoints = allPoints[:totalLimit]
+	}
+	warnListPageCap(fetched, totalLimit, remainingToken)
+
+	merged, err := marshalListResponse(allPoints, remainingToken)
+	if err != nil {
+		return client.NewAPIError(0, fmt.Sprintf("failed to build output: %v", err), "")
+	}
+	return printOutput(simplifyListResponse(merged, opts, totalLimit, truncated, remainingToken))
+}
+
+func effectiveListLimit(limit int) int {
+	if limit > 0 {
+		return limit
+	}
+	return 500
+}
+
+func newListPageFetcher(c *client.Client, req *client.Request, maxPage int) func(string, int) ([]json.RawMessage, string, error) {
+	return func(pageToken string, want int) ([]json.RawMessage, string, error) {
 		if req.Query == nil {
 			req.Query = url.Values{}
 		}
-		// Request exactly the rows still needed (within the per-type cap) so the
-		// page boundary aligns with --limit and the surfaced nextPageToken
-		// resumes losslessly.
-		pageSize := want
-		if pageSize > maxPage {
-			pageSize = maxPage
-		}
+		pageSize := min(want, maxPage)
 		req.Query.Set("pageSize", strconv.Itoa(pageSize))
-		if pageToken != "" {
-			req.Query.Set("pageToken", pageToken)
-		} else {
+		if pageToken == "" {
 			req.Query.Del("pageToken")
+		} else {
+			req.Query.Set("pageToken", pageToken)
 		}
+
 		resp, err := c.Do(req)
 		if err != nil {
-			if cliErr, ok := err.(*client.CLIError); ok {
-				return nil, "", cliErr
-			}
-			return nil, "", client.NewAPIError(0, err.Error(), "")
+			return nil, "", asAPIError(err)
 		}
 		var pageData struct {
 			DataPoints    []json.RawMessage `json:"dataPoints"`
@@ -454,59 +501,52 @@ func executeDataList(req *client.Request, opts dataListOpts) error {
 		}
 		return pageData.DataPoints, pageData.NextPageToken, nil
 	}
+}
 
-	allPoints, remainingToken, err := collectPages(totalLimit, listPageCap, opts.pageToken, fetchPage)
-	if err != nil {
-		return err
+func asAPIError(err error) error {
+	if cliErr, ok := client.AsCLIError(err); ok {
+		return cliErr
 	}
+	return client.NewAPIError(0, err.Error(), "")
+}
 
-	fetched := len(allPoints)
-	truncated := limitTruncated(fetched, totalLimit, remainingToken)
-	cappedByPageCap := remainingToken != "" && fetched < totalLimit
-
-	// Cap to limit.
-	if fetched > totalLimit {
-		allPoints = allPoints[:totalLimit]
+func warnListPageCap(fetched, limit int, remainingToken string) {
+	if remainingToken == "" || fetched >= limit {
+		return
 	}
+	fmt.Fprintf(os.Stderr,
+		"warning: stopped after %d pages with more data still available; "+
+			"continue with --page-token %s or narrow --from/--to\n",
+		listPageCap, remainingToken)
+}
 
-	// Rebuild as a single response. If pagination stopped early with more data
-	// available, preserve the continuation token and warn so the result is not
-	// mistaken for the complete set.
-	mergedObj := map[string]interface{}{"dataPoints": allPoints}
+func marshalListResponse(points []json.RawMessage, remainingToken string) (json.RawMessage, error) {
+	merged := map[string]interface{}{"dataPoints": points}
 	if remainingToken != "" {
-		mergedObj["nextPageToken"] = remainingToken
+		merged["nextPageToken"] = remainingToken
 	}
-	if cappedByPageCap {
-		fmt.Fprintf(os.Stderr,
-			"warning: stopped after %d pages with more data still available; "+
-				"continue with --page-token %s or narrow --from/--to\n",
-			listPageCap, remainingToken)
-	}
-	merged, _ := json.Marshal(mergedObj)
+	return json.Marshal(merged)
+}
 
-	// Simplify.
+func simplifyListResponse(merged json.RawMessage, opts dataListOpts, limit int, truncated bool, remainingToken string) json.RawMessage {
 	var simplified json.RawMessage
-	if opts.dataType == "sleep" {
+	if opts.dataType == dataTypeSleep {
 		simplified = output.SimplifySleepResponse(merged, opts.sleepDetail, flagRaw)
 	} else {
 		simplified = output.SimplifyResponse(merged, opts.dataType, flagRaw)
 	}
-
-	// Generate and inject hints — but never into --raw output, which is
-	// documented as the original API response with nothing added.
-	if !flagRaw {
-		hints := output.GenerateHints(simplified, opts.dataType, opts.operation, totalLimit, opts.from, opts.to, opts.sleepDetail)
-		if truncated {
-			hints = append(hints, fmt.Sprintf(
-				"returned %d rows = --limit; more data exists — fetch the next page with --page-token %s, "+
-					"or raise --limit / narrow --from/--to",
-				totalLimit, remainingToken))
-		}
-		simplified = output.InjectHints(simplified, hints)
-		simplified = output.EnsureEnvelope(simplified)
+	if flagRaw {
+		return simplified
 	}
 
-	return printOutput(simplified)
+	hints := output.GenerateHints(simplified, opts.dataType, opts.operation, limit, opts.from, opts.to, opts.sleepDetail)
+	if truncated {
+		hints = append(hints, fmt.Sprintf(
+			"returned %d rows = --limit; more data exists — fetch the next page with --page-token %s, "+
+				"or raise --limit / narrow --from/--to",
+			limit, remainingToken))
+	}
+	return output.EnsureEnvelope(output.InjectHints(simplified, hints))
 }
 
 // executeDataGet fetches a single data point and reuses the list simplifier by
@@ -515,7 +555,7 @@ func executeDataGet(req *client.Request, opts dataListOpts) error {
 	c := newClient()
 	resp, err := c.Do(req)
 	if err != nil {
-		if cliErr, ok := err.(*client.CLIError); ok {
+		if cliErr, ok := client.AsCLIError(err); ok {
 			return cliErr
 		}
 		return client.NewAPIError(0, err.Error(), "")
@@ -526,7 +566,7 @@ func executeDataGet(req *client.Request, opts dataListOpts) error {
 	})
 
 	var simplified json.RawMessage
-	if opts.dataType == "sleep" {
+	if opts.dataType == dataTypeSleep {
 		simplified = output.SimplifySleepResponse(merged, opts.sleepDetail, flagRaw)
 	} else {
 		simplified = output.SimplifyResponse(merged, opts.dataType, flagRaw)
@@ -547,48 +587,45 @@ func executeDataRollup(req *client.Request, opts dataListOpts) error {
 	c := newClient()
 	resp, err := c.Do(req)
 	if err != nil {
-		if cliErr, ok := err.(*client.CLIError); ok {
-			return cliErr
-		}
-		return client.NewAPIError(0, err.Error(), "")
+		return asAPIError(err)
 	}
+	body, err := paginateRollup(c, req, resp.Body)
+	if err != nil {
+		return err
+	}
+	return printOutput(simplifyRollupResponse(body, opts))
+}
 
-	body := resp.Body
+func paginateRollup(c *client.Client, req *client.Request, first json.RawMessage) (json.RawMessage, error) {
 	// Only POST rollup endpoints paginate with a body pageToken; reconcile is
 	// a GET and returns dataPoints, which collectRollupPages passes through.
-	if req.Method == "POST" && len(req.Body) > 0 {
-		baseBody := req.Body
-		body, err = collectRollupPages(resp.Body, listPageCap, func(token string) (json.RawMessage, error) {
-			pageBody, err := withPageToken(baseBody, token)
-			if err != nil {
-				return nil, client.NewAPIError(0,
-					fmt.Sprintf("failed to build pagination request: %v", err), "")
-			}
-			req.Body = pageBody
-			pageResp, err := c.Do(req)
-			if err != nil {
-				if cliErr, ok := err.(*client.CLIError); ok {
-					return nil, cliErr
-				}
-				return nil, client.NewAPIError(0, err.Error(), "")
-			}
-			return pageResp.Body, nil
-		})
-		req.Body = baseBody
+	if req.Method != httpMethodPost || len(req.Body) == 0 {
+		return first, nil
+	}
+	baseBody := req.Body
+	defer func() { req.Body = baseBody }()
+	return collectRollupPages(first, listPageCap, func(token string) (json.RawMessage, error) {
+		pageBody, err := withPageToken(baseBody, token)
 		if err != nil {
-			return err
+			return nil, client.NewAPIError(0,
+				fmt.Sprintf("failed to build pagination request: %v", err), "")
 		}
-	}
+		req.Body = pageBody
+		pageResp, err := c.Do(req)
+		if err != nil {
+			return nil, asAPIError(err)
+		}
+		return pageResp.Body, nil
+	})
+}
 
+func simplifyRollupResponse(body json.RawMessage, opts dataListOpts) json.RawMessage {
 	simplified := output.SimplifyResponse(body, opts.dataType, flagRaw)
-
-	if !flagRaw {
-		hints := output.GenerateHints(body, opts.dataType, opts.operation, 0, opts.from, opts.to, opts.sleepDetail)
-		simplified = output.InjectHints(simplified, hints)
-		simplified = output.EnsureEnvelope(simplified)
+	if flagRaw {
+		return simplified
 	}
-
-	return printOutput(simplified)
+	hints := output.GenerateHints(body, opts.dataType, opts.operation, 0, opts.from, opts.to, opts.sleepDetail)
+	return output.EnsureEnvelope(output.InjectHints(simplified, hints))
 }
 
 // withPageToken returns a copy of a JSON request body with pageToken set, so
@@ -660,7 +697,7 @@ func newListCommand(dt *types.DataType) *cobra.Command {
 		detail           bool
 	)
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   opList,
 		Short: fmt.Sprintf("List %s data points", dt.ID),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			f, err := buildFilter(dt, from, to, filter)
@@ -672,7 +709,7 @@ func newListCommand(dt *types.DataType) *cobra.Command {
 				query.Set("filter", f)
 			}
 			req := &client.Request{
-				Method: "GET",
+				Method: httpMethodGet,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints", dt.ID),
 				Query:  query,
 			}
@@ -681,7 +718,7 @@ func newListCommand(dt *types.DataType) *cobra.Command {
 			}
 			return executeDataList(req, dataListOpts{
 				dataType:    dt.ID,
-				operation:   "list",
+				operation:   opList,
 				limit:       limit,
 				pageToken:   pageToken,
 				from:        from,
@@ -695,7 +732,7 @@ func newListCommand(dt *types.DataType) *cobra.Command {
 	cmd.Flags().StringVar(&filter, "filter", "", "Raw API filter (overrides --from/--to)")
 	cmd.Flags().IntVar(&limit, "limit", 0, "Max total results (default: 500)")
 	cmd.Flags().StringVar(&pageToken, "page-token", "", "Resume from a previous response's nextPageToken (fetches the next page losslessly)")
-	if dt.ID == "sleep" {
+	if dt.ID == dataTypeSleep {
 		cmd.Flags().BoolVar(&detail, "detail", false, "Include per-stage time breakdown")
 	}
 	return cmd
@@ -706,18 +743,18 @@ func newListCommand(dt *types.DataType) *cobra.Command {
 func newGetCommand(dt *types.DataType) *cobra.Command {
 	var id string
 	cmd := &cobra.Command{
-		Use:   "get",
+		Use:   opGet,
 		Short: fmt.Sprintf("Get a single %s data point by ID", dt.ID),
 		Long: fmt.Sprintf(`Retrieve one %s data point by its ID.
 
 Use 'ghealth data %s list --limit 5' to find data point IDs.`, dt.ID, dt.ID),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if id == "" {
-				return client.NewValidationError("--id is required",
+				return client.NewValidationError(idRequiredMsg,
 					fmt.Sprintf("Use 'ghealth data %s list --limit 5' to find data point IDs", dt.ID))
 			}
 			req := &client.Request{
-				Method: "GET",
+				Method: httpMethodGet,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints/%s", dt.ID, id),
 			}
 			if flagDryRun {
@@ -725,11 +762,11 @@ Use 'ghealth data %s list --limit 5' to find data point IDs.`, dt.ID, dt.ID),
 			}
 			return executeDataGet(req, dataListOpts{
 				dataType:  dt.ID,
-				operation: "get",
+				operation: opGet,
 			})
 		},
 	}
-	cmd.Flags().StringVar(&id, "id", "", "Data point ID (required)")
+	cmd.Flags().StringVar(&id, "id", "", idFlagUsage)
 	return cmd
 }
 
@@ -752,7 +789,7 @@ The API returns an Operation object (write operations are asynchronous).`, dt.ID
 					fmt.Sprintf("Use 'ghealth data %s list --raw --limit 1' to see the expected format", dt.ID))
 			}
 			req := &client.Request{
-				Method: "POST",
+				Method: httpMethodPost,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints", dt.ID),
 				Body:   []byte(jsonBody),
 			}
@@ -775,7 +812,7 @@ func newUpdateCommand(dt *types.DataType) *cobra.Command {
 		updateMask string
 	)
 	cmd := &cobra.Command{
-		Use:   "update",
+		Use:   opUpdate,
 		Short: fmt.Sprintf("Update %s data point", dt.ID),
 		Long: fmt.Sprintf(`Update an existing %s data point by ID.
 
@@ -785,7 +822,7 @@ Use --update-mask to specify which fields to update (comma-separated).
 The API returns an Operation object (write operations are asynchronous).`, dt.ID, dt.ID),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if id == "" {
-				return client.NewValidationError("--id is required",
+				return client.NewValidationError(idRequiredMsg,
 					fmt.Sprintf("Use 'ghealth data %s list --limit 5' to find data point IDs", dt.ID))
 			}
 			if jsonBody == "" {
@@ -805,7 +842,7 @@ The API returns an Operation object (write operations are asynchronous).`, dt.ID
 			return doRequest(req)
 		},
 	}
-	cmd.Flags().StringVar(&id, "id", "", "Data point ID (required)")
+	cmd.Flags().StringVar(&id, "id", "", idFlagUsage)
 	cmd.Flags().StringVar(&jsonBody, "json", "", "Fields to update as JSON (required)")
 	cmd.Flags().StringVar(&updateMask, "update-mask", "", "Comma-separated field paths to update")
 	return cmd
@@ -844,7 +881,7 @@ The API returns an Operation object (write operations are asynchronous).`, dt.ID
 				"names": names,
 			})
 			req := &client.Request{
-				Method: "POST",
+				Method: httpMethodPost,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints:batchDelete", dt.ID),
 				Body:   body,
 			}
@@ -977,7 +1014,7 @@ func newRollupCommand(dt *types.DataType) *cobra.Command {
 				}
 			}
 			req := &client.Request{
-				Method: "POST",
+				Method: httpMethodPost,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints:rollUp", dt.ID),
 				Body:   body,
 			}
@@ -1052,7 +1089,7 @@ func newDailyRollupCommand(dt *types.DataType) *cobra.Command {
 				}
 			}
 			req := &client.Request{
-				Method: "POST",
+				Method: httpMethodPost,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints:dailyRollUp", dt.ID),
 				Body:   body,
 			}
@@ -1088,7 +1125,7 @@ func newReconcileCommand(dt *types.DataType) *cobra.Command {
 				query.Set("filter", f)
 			}
 			req := &client.Request{
-				Method: "GET",
+				Method: httpMethodGet,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints:reconcile", dt.ID),
 				Query:  query,
 			}
@@ -1115,83 +1152,106 @@ func newExportTCXCommand(dt *types.DataType) *cobra.Command {
 		asFormat   string
 	)
 	cmd := &cobra.Command{
-		Use:   "export-tcx",
+		Use:   types.OpExportTCX,
 		Short: fmt.Sprintf("Export %s as TCX, or as a trackpoint CSV with --as csv", dt.ID),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if id == "" {
-				return client.NewValidationError("--id is required", "Provide the data point ID")
-			}
-			if outputFile == "" {
-				return client.NewValidationError("--output is required", "Provide the output file path, or '-' for stdout")
-			}
-			if asFormat != "tcx" && asFormat != "csv" {
-				return client.NewValidationError(
-					fmt.Sprintf("invalid --as value: %s", asFormat),
-					"Use --as tcx (raw export) or --as csv (one row per trackpoint)",
-				)
-			}
-			req := &client.Request{
-				Method: "GET",
-				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints/%s:exportExerciseTcx", dt.ID, id),
-				// HTTP clients must request alt=media to receive the raw TCX file.
-				// Without it the API returns a JSON ExportExerciseTcxResponse
-				// envelope ({"tcxData": ...}), which would be written verbatim to
-				// the .tcx file instead of valid TCX/XML.
-				Query: url.Values{"alt": {"media"}},
-			}
-			if flagDryRun {
-				return doDryRun(req)
-			}
-			c := newClient()
-			resp, err := c.Do(req)
-			if err != nil {
-				if cliErr, ok := err.(*client.CLIError); ok {
-					return cliErr
-				}
-				return client.NewAPIError(0, err.Error(), "")
-			}
-			payload := resp.Body
-			rows := -1
-			if asFormat == "csv" {
-				var buf bytes.Buffer
-				rows, err = output.WriteTCXAsCSV(resp.Body, &buf)
-				if err != nil {
-					return client.NewValidationError(
-						fmt.Sprintf("convert TCX to CSV: %v", err),
-						"Re-run with --as tcx to inspect the raw export",
-					)
-				}
-				payload = buf.Bytes()
-			}
-			if outputFile == "-" {
-				if _, err := os.Stdout.Write(payload); err != nil {
-					return client.NewValidationError(fmt.Sprintf("write to stdout: %v", err), "")
-				}
-			} else {
-				if err := os.WriteFile(outputFile, payload, 0644); err != nil {
-					return client.NewValidationError(
-						fmt.Sprintf("failed to write file: %v", err),
-						"Check that the output directory exists and is writable",
-					)
-				}
-				if rows >= 0 {
-					// Schema peek: row count + header + first rows, so an agent
-					// learns the CSV shape without opening the file.
-					fmt.Fprintf(os.Stderr, "Exported %d trackpoint row(s) to %s\n%s", rows, outputFile, csvPeek(payload, 3))
-					if rows == 0 {
-						fmt.Fprintln(os.Stderr, "0 rows = no time-series track (indoor/no-sensor activity); session summary and notes are in 'data exercise list'.")
-					}
-				} else {
-					fmt.Fprintf(os.Stderr, "Exported to %s\n", outputFile)
-				}
-			}
-			return nil
+			return executeExportTCX(dt, id, outputFile, asFormat)
 		},
 	}
-	cmd.Flags().StringVar(&id, "id", "", "Data point ID (required)")
+	cmd.Flags().StringVar(&id, "id", "", idFlagUsage)
 	cmd.Flags().StringVar(&outputFile, "output", "", "Output file path (required; '-' writes to stdout)")
 	cmd.Flags().StringVar(&asFormat, "as", "tcx", "Output format: tcx (raw Google export) or csv (one row per trackpoint: time, lap, position, altitude, distance, heart rate; lap-less indoor activities yield a header-only CSV)")
 	return cmd
+}
+
+func executeExportTCX(dt *types.DataType, id, outputFile, asFormat string) error {
+	if err := validateExportTCXOptions(id, outputFile, asFormat); err != nil {
+		return err
+	}
+	req := exportTCXRequest(dt.ID, id)
+	if flagDryRun {
+		return doDryRun(req)
+	}
+
+	resp, err := newClient().Do(req)
+	if err != nil {
+		return asAPIError(err)
+	}
+	payload, rows, err := formatTCXExport(resp.Body, asFormat)
+	if err != nil {
+		return err
+	}
+	return writeTCXExport(outputFile, payload, rows)
+}
+
+func validateExportTCXOptions(id, outputFile, asFormat string) error {
+	if id == "" {
+		return client.NewValidationError(idRequiredMsg, "Provide the data point ID")
+	}
+	if outputFile == "" {
+		return client.NewValidationError("--output is required", "Provide the output file path, or '-' for stdout")
+	}
+	if asFormat != "tcx" && asFormat != formatCSV {
+		return client.NewValidationError(
+			fmt.Sprintf("invalid --as value: %s", asFormat),
+			"Use --as tcx (raw export) or --as csv (one row per trackpoint)",
+		)
+	}
+	return nil
+}
+
+func exportTCXRequest(dataType, id string) *client.Request {
+	return &client.Request{
+		Method: httpMethodGet,
+		Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints/%s:exportExerciseTcx", dataType, id),
+		// alt=media returns raw XML instead of a JSON tcxData envelope.
+		Query: url.Values{"alt": {"media"}},
+	}
+}
+
+func formatTCXExport(body json.RawMessage, asFormat string) ([]byte, int, error) {
+	if asFormat != formatCSV {
+		return body, -1, nil
+	}
+	var buf bytes.Buffer
+	rows, err := output.WriteTCXAsCSV(body, &buf)
+	if err != nil {
+		return nil, 0, client.NewValidationError(
+			fmt.Sprintf("convert TCX to CSV: %v", err),
+			"Re-run with --as tcx to inspect the raw export",
+		)
+	}
+	return buf.Bytes(), rows, nil
+}
+
+func writeTCXExport(outputFile string, payload []byte, rows int) error {
+	if outputFile == "-" {
+		if _, err := os.Stdout.Write(payload); err != nil {
+			return client.NewValidationError(fmt.Sprintf("write to stdout: %v", err), "")
+		}
+		return nil
+	}
+	if err := os.WriteFile(outputFile, payload, 0644); err != nil {
+		return client.NewValidationError(
+			fmt.Sprintf("failed to write file: %v", err),
+			"Check that the output directory exists and is writable",
+		)
+	}
+	reportTCXExport(outputFile, payload, rows)
+	return nil
+}
+
+func reportTCXExport(outputFile string, payload []byte, rows int) {
+	if rows < 0 {
+		fmt.Fprintf(os.Stderr, "Exported to %s\n", outputFile)
+		return
+	}
+	// Schema peek: row count + header + first rows, so an agent learns the CSV
+	// shape without opening the file.
+	fmt.Fprintf(os.Stderr, "Exported %d trackpoint row(s) to %s\n%s", rows, outputFile, csvPeek(payload, 3))
+	if rows == 0 {
+		fmt.Fprintln(os.Stderr, "0 rows = no time-series track (indoor/no-sensor activity); session summary and notes are in 'data exercise list'.")
+	}
 }
 
 // csvPeek returns the header plus up to n data rows of a CSV payload, indented

@@ -22,6 +22,27 @@ import (
 	"time"
 )
 
+// JSON field names duplicated across multiple simplify* helpers.
+const (
+	fieldDate             = "date"
+	fieldStart            = "start"
+	fieldEnd              = "end"
+	fieldStartDate        = "startDate"
+	fieldEndDate          = "endDate"
+	fieldDataPoints       = "dataPoints"
+	fieldRollupDataPoints = "rollupDataPoints"
+	fieldNextPageToken    = "nextPageToken"
+	fieldType             = "type"
+	fieldName             = "name"
+	fieldInterval         = "interval"
+	fieldStartTime        = "startTime"
+	fieldEndTime          = "endTime"
+	fieldStartUtcOffset   = "startUtcOffset"
+	fieldEndUtcOffset     = "endUtcOffset"
+
+	jsonIndent = "  "
+)
+
 // SimplifyResponse transforms a raw Health API response into a compact,
 // agent-friendly format. Returns the original data unchanged if --raw is set.
 func SimplifyResponse(data json.RawMessage, dataType string, raw bool) json.RawMessage {
@@ -35,80 +56,103 @@ func SimplifyResponse(data json.RawMessage, dataType string, raw bool) json.RawM
 	}
 
 	// Handle list responses (dataPoints array).
-	if dpRaw, ok := obj["dataPoints"]; ok {
-		var dataPoints []map[string]interface{}
-		if err := json.Unmarshal(dpRaw, &dataPoints); err != nil {
-			return data
-		}
-
-		simplified := make([]map[string]interface{}, 0, len(dataPoints))
-		for _, dp := range dataPoints {
-			simplified = append(simplified, simplifyDataPoint(dp, dataType))
-		}
-
-		result := map[string]interface{}{"dataPoints": simplified}
-		if tok, ok := obj["nextPageToken"]; ok {
-			var t string
-			json.Unmarshal(tok, &t)
-			if t != "" {
-				result["nextPageToken"] = t
-			}
-		}
-
-		out, _ := json.MarshalIndent(result, "", "  ")
-		return out
+	if dpRaw, ok := obj[fieldDataPoints]; ok {
+		return simplifyDataPointsResponse(obj, dpRaw, dataType, data)
 	}
 
 	// Handle rollup responses (rollupDataPoints array).
-	if rpRaw, ok := obj["rollupDataPoints"]; ok {
-		var rollupPoints []map[string]interface{}
-		if err := json.Unmarshal(rpRaw, &rollupPoints); err != nil {
-			return data
-		}
-
-		simplified := make([]map[string]interface{}, 0, len(rollupPoints))
-		for _, rp := range rollupPoints {
-			s := simplifyRollupPoint(rp)
-			// Skip rollup windows that carry only time fields and no metric
-			// value. dailyRollUp points have "date" (or "startDate"/"endDate"
-			// for multi-day windows); rollUp points have "start"/"end" —
-			// count any other key as a real metric.
-			metrics := 0
-			for k := range s {
-				switch k {
-				case "date", "start", "end", "startDate", "endDate":
-				default:
-					metrics++
-				}
-			}
-			if metrics == 0 {
-				continue
-			}
-			simplified = append(simplified, s)
-		}
-
-		// rollUp paginates server-side (POST-with-body pageToken). A remaining
-		// continuation token must survive simplification or the result looks
-		// complete when it is not.
-		if tok, ok := obj["nextPageToken"]; ok {
-			var t string
-			json.Unmarshal(tok, &t)
-			if t != "" {
-				result := map[string]interface{}{
-					"rollupDataPoints": simplified,
-					"nextPageToken":    t,
-				}
-				out, _ := json.MarshalIndent(result, "", "  ")
-				return out
-			}
-		}
-
-		out, _ := json.MarshalIndent(simplified, "", "  ")
-		return out
+	if rpRaw, ok := obj[fieldRollupDataPoints]; ok {
+		return simplifyRollupResponse(obj, rpRaw, data)
 	}
 
 	// Not a recognized structure, return as-is.
 	return data
+}
+
+// extractNextPageToken returns the nextPageToken carried by obj, or "" if
+// it is absent, unparsable, or empty. Shared by every response branch that
+// must not silently drop a pagination continuation token.
+func extractNextPageToken(obj map[string]json.RawMessage) string {
+	tok, ok := obj[fieldNextPageToken]
+	if !ok {
+		return ""
+	}
+	var t string
+	_ = json.Unmarshal(tok, &t) // best effort: unparsable token counts as none
+	return t
+}
+
+// simplifyDataPointsResponse simplifies a {"dataPoints": [...]} response,
+// preserving a leftover nextPageToken. fallback is returned verbatim if the
+// dataPoints array cannot be parsed.
+func simplifyDataPointsResponse(obj map[string]json.RawMessage, dpRaw json.RawMessage, dataType string, fallback json.RawMessage) json.RawMessage {
+	var dataPoints []map[string]interface{}
+	if err := json.Unmarshal(dpRaw, &dataPoints); err != nil {
+		return fallback
+	}
+
+	simplified := make([]map[string]interface{}, 0, len(dataPoints))
+	for _, dp := range dataPoints {
+		simplified = append(simplified, simplifyDataPoint(dp, dataType))
+	}
+
+	result := map[string]interface{}{fieldDataPoints: simplified}
+	if t := extractNextPageToken(obj); t != "" {
+		result[fieldNextPageToken] = t
+	}
+
+	out, _ := json.MarshalIndent(result, "", jsonIndent)
+	return out
+}
+
+// simplifyRollupResponse simplifies a {"rollupDataPoints": [...]} response.
+// rollUp paginates server-side (POST-with-body pageToken); a remaining
+// continuation token must survive simplification or the result looks
+// complete when it is not. fallback is returned verbatim if the
+// rollupDataPoints array cannot be parsed.
+func simplifyRollupResponse(obj map[string]json.RawMessage, rpRaw json.RawMessage, fallback json.RawMessage) json.RawMessage {
+	var rollupPoints []map[string]interface{}
+	if err := json.Unmarshal(rpRaw, &rollupPoints); err != nil {
+		return fallback
+	}
+
+	simplified := make([]map[string]interface{}, 0, len(rollupPoints))
+	for _, rp := range rollupPoints {
+		s := simplifyRollupPoint(rp)
+		// Skip rollup windows that carry only time fields and no metric
+		// value. dailyRollUp points have "date" (or "startDate"/"endDate"
+		// for multi-day windows); rollUp points have "start"/"end" —
+		// count any other key as a real metric.
+		if !rollupPointHasMetric(s) {
+			continue
+		}
+		simplified = append(simplified, s)
+	}
+
+	if t := extractNextPageToken(obj); t != "" {
+		result := map[string]interface{}{
+			fieldRollupDataPoints: simplified,
+			fieldNextPageToken:    t,
+		}
+		out, _ := json.MarshalIndent(result, "", jsonIndent)
+		return out
+	}
+
+	out, _ := json.MarshalIndent(simplified, "", jsonIndent)
+	return out
+}
+
+// rollupPointHasMetric reports whether s carries any key besides the
+// time-window fields, i.e. whether it has a real metric value.
+func rollupPointHasMetric(s map[string]interface{}) bool {
+	for k := range s {
+		switch k {
+		case fieldDate, fieldStart, fieldEnd, fieldStartDate, fieldEndDate:
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 // SimplifySleepResponse handles sleep-specific simplification with optional stage detail.
@@ -122,7 +166,7 @@ func SimplifySleepResponse(data json.RawMessage, includeStages bool, raw bool) j
 		return data
 	}
 
-	dpRaw, ok := obj["dataPoints"]
+	dpRaw, ok := obj[fieldDataPoints]
 	if !ok {
 		return data
 	}
@@ -137,16 +181,12 @@ func SimplifySleepResponse(data json.RawMessage, includeStages bool, raw bool) j
 		simplified = append(simplified, simplifySleepPoint(dp, includeStages))
 	}
 
-	result := map[string]interface{}{"dataPoints": simplified}
-	if tok, ok := obj["nextPageToken"]; ok {
-		var t string
-		json.Unmarshal(tok, &t)
-		if t != "" {
-			result["nextPageToken"] = t
-		}
+	result := map[string]interface{}{fieldDataPoints: simplified}
+	if t := extractNextPageToken(obj); t != "" {
+		result[fieldNextPageToken] = t
 	}
 
-	out, _ := json.MarshalIndent(result, "", "  ")
+	out, _ := json.MarshalIndent(result, "", jsonIndent)
 	return out
 }
 
@@ -165,22 +205,22 @@ func simplifyDataPoint(dp map[string]interface{}, dataType string) map[string]in
 	}
 
 	// Extract timestamps based on structure.
-	if iv, ok := typeData["interval"].(map[string]interface{}); ok {
+	if iv, ok := typeData[fieldInterval].(map[string]interface{}); ok {
 		// Interval type: has startTime/endTime
-		result["start"] = formatTimeWithOffset(iv, "startTime", "startUtcOffset")
-		result["end"] = formatTimeWithOffset(iv, "endTime", "endUtcOffset")
+		result[fieldStart] = formatTimeWithOffset(iv, fieldStartTime, fieldStartUtcOffset)
+		result[fieldEnd] = formatTimeWithOffset(iv, fieldEndTime, fieldEndUtcOffset)
 	} else if st, ok := typeData["sampleTime"].(map[string]interface{}); ok {
 		// Sample type: has physicalTime
 		result["time"] = formatTimeWithOffset(st, "physicalTime", "utcOffset")
-	} else if d, ok := typeData["date"].(map[string]interface{}); ok {
+	} else if d, ok := typeData[fieldDate].(map[string]interface{}); ok {
 		// Daily type: has date object {year, month, day} → flatten to "YYYY-MM-DD"
-		result["date"] = formatCivilDate(d)
+		result[fieldDate] = formatCivilDate(d)
 	}
 
 	// Extract all value fields (skip time-related ones).
 	for k, v := range typeData {
 		switch k {
-		case "interval", "sampleTime", "date", "createTime", "updateTime":
+		case fieldInterval, "sampleTime", fieldDate, "createTime", "updateTime":
 			continue
 		default:
 			result[k] = v
@@ -191,7 +231,7 @@ func simplifyDataPoint(dp map[string]interface{}, dataType string) map[string]in
 	result["source"] = extractSource(dp)
 
 	// Include ID if present (needed for update/delete).
-	if name, ok := dp["name"].(string); ok {
+	if name, ok := dp[fieldName].(string); ok {
 		parts := strings.Split(name, "/")
 		result["id"] = parts[len(parts)-1]
 	}
@@ -211,83 +251,38 @@ func civilDateTime(d map[string]interface{}) time.Time {
 }
 
 func simplifySleepPoint(dp map[string]interface{}, includeStages bool) map[string]interface{} {
-	result := make(map[string]interface{})
-
 	sleepData, ok := dp["sleep"].(map[string]interface{})
 	if !ok {
 		return dp
 	}
 
-	// Timestamps.
-	if iv, ok := sleepData["interval"].(map[string]interface{}); ok {
-		result["start"] = formatTimeWithOffset(iv, "startTime", "startUtcOffset")
-		result["end"] = formatTimeWithOffset(iv, "endTime", "endUtcOffset")
-	}
+	result := make(map[string]interface{})
+	applySleepTimestamps(result, sleepData)
 
-	// Sleep type.
-	if t, ok := sleepData["type"]; ok {
+	if t, ok := sleepData[fieldType]; ok {
 		result["sleepType"] = t
 	}
 
-	// Metadata.
 	if meta, ok := sleepData["metadata"].(map[string]interface{}); ok {
 		if nap, ok := meta["nap"]; ok {
 			result["isNap"] = nap
 		}
 	}
 
-	// Summary (always include).
 	if summary, ok := sleepData["summary"].(map[string]interface{}); ok {
-		if v, ok := summary["minutesAsleep"]; ok {
-			result["minutesAsleep"] = toInt(v)
-		}
-		if v, ok := summary["minutesAwake"]; ok {
-			result["minutesAwake"] = toInt(v)
-		}
-		if v, ok := summary["minutesInSleepPeriod"]; ok {
-			result["totalMinutes"] = toInt(v)
-		}
-		if v, ok := summary["minutesToFallAsleep"]; ok {
-			result["minutesToFallAsleep"] = toInt(v)
-		}
-
-		// Stage summary as flat map.
-		if stages, ok := summary["stagesSummary"].([]interface{}); ok {
-			stageMap := make(map[string]int)
-			for _, s := range stages {
-				if sm, ok := s.(map[string]interface{}); ok {
-					sType, _ := sm["type"].(string)
-					mins := toInt(sm["minutes"])
-					if sType != "" {
-						stageMap[sType] = mins
-					}
-				}
-			}
-			result["stageMinutes"] = stageMap
-		}
+		applySleepSummary(result, summary)
 	}
 
 	// Detailed stages (only with --detail).
 	if includeStages {
 		if stages, ok := sleepData["stages"].([]interface{}); ok {
-			compactStages := make([]map[string]interface{}, 0, len(stages))
-			for _, s := range stages {
-				if sm, ok := s.(map[string]interface{}); ok {
-					compact := map[string]interface{}{
-						"type":  sm["type"],
-						"start": formatTimeWithOffset(sm, "startTime", "startUtcOffset"),
-						"end":   formatTimeWithOffset(sm, "endTime", "endUtcOffset"),
-					}
-					compactStages = append(compactStages, compact)
-				}
-			}
-			result["stages"] = compactStages
+			result["stages"] = compactSleepStages(stages)
 		}
 	}
 
 	result["source"] = extractSource(dp)
 
-	if name, ok := dp["name"].(string); ok {
+	if name, ok := dp[fieldName].(string); ok {
 		parts := strings.Split(name, "/")
 		result["id"] = parts[len(parts)-1]
 	}
@@ -295,44 +290,77 @@ func simplifySleepPoint(dp map[string]interface{}, includeStages bool) map[strin
 	return result
 }
 
+// applySleepTimestamps copies interval start/end (local time) from
+// sleepData into result, if present.
+func applySleepTimestamps(result, sleepData map[string]interface{}) {
+	if iv, ok := sleepData[fieldInterval].(map[string]interface{}); ok {
+		result[fieldStart] = formatTimeWithOffset(iv, fieldStartTime, fieldStartUtcOffset)
+		result[fieldEnd] = formatTimeWithOffset(iv, fieldEndTime, fieldEndUtcOffset)
+	}
+}
+
+// applySleepSummary copies the always-included summary fields (minutes
+// asleep/awake/total/toFallAsleep and the per-stage minute map) into result.
+func applySleepSummary(result, summary map[string]interface{}) {
+	if v, ok := summary["minutesAsleep"]; ok {
+		result["minutesAsleep"] = toInt(v)
+	}
+	if v, ok := summary["minutesAwake"]; ok {
+		result["minutesAwake"] = toInt(v)
+	}
+	if v, ok := summary["minutesInSleepPeriod"]; ok {
+		result["totalMinutes"] = toInt(v)
+	}
+	if v, ok := summary["minutesToFallAsleep"]; ok {
+		result["minutesToFallAsleep"] = toInt(v)
+	}
+	if stages, ok := summary["stagesSummary"].([]interface{}); ok {
+		result["stageMinutes"] = sleepStageMinutes(stages)
+	}
+}
+
+// sleepStageMinutes flattens a stagesSummary array into a {stageType:
+// minutes} map, skipping entries without a stage type.
+func sleepStageMinutes(stages []interface{}) map[string]int {
+	stageMap := make(map[string]int)
+	for _, s := range stages {
+		sm, ok := s.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		sType, _ := sm[fieldType].(string)
+		if sType == "" {
+			continue
+		}
+		stageMap[sType] = toInt(sm["minutes"])
+	}
+	return stageMap
+}
+
+// compactSleepStages converts the raw per-stage detail array (only emitted
+// with --detail) into {type, start, end} entries.
+func compactSleepStages(stages []interface{}) []map[string]interface{} {
+	compactStages := make([]map[string]interface{}, 0, len(stages))
+	for _, s := range stages {
+		sm, ok := s.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		compactStages = append(compactStages, map[string]interface{}{
+			fieldType:  sm[fieldType],
+			fieldStart: formatTimeWithOffset(sm, fieldStartTime, fieldStartUtcOffset),
+			fieldEnd:   formatTimeWithOffset(sm, fieldEndTime, fieldEndUtcOffset),
+		})
+	}
+	return compactStages
+}
+
 func simplifyRollupPoint(rp map[string]interface{}) map[string]interface{} {
 	result := make(map[string]interface{})
-
-	// dailyRollUp points carry a civil date; rollUp points carry physical
-	// startTime/endTime instead.
-	if cst, ok := rp["civilStartTime"].(map[string]interface{}); ok {
-		if d, ok := cst["date"].(map[string]interface{}); ok {
-			start := civilDateTime(d)
-			result["date"] = formatCivilDate(d)
-			// Multi-day windows (--window-days > 1) must not be mislabeled
-			// as a single day. The civil interval is closed-open, so the
-			// inclusive last day is civilEndTime minus one day; emit explicit
-			// startDate/endDate instead of "date". 1-day buckets keep the
-			// single "date" field for backward compatibility.
-			if cet, ok := rp["civilEndTime"].(map[string]interface{}); ok {
-				if ed, ok := cet["date"].(map[string]interface{}); ok {
-					end := civilDateTime(ed)
-					if end.Sub(start) > 24*time.Hour {
-						delete(result, "date")
-						result["startDate"] = formatCivilDate(d)
-						last := end.AddDate(0, 0, -1)
-						result["endDate"] = fmt.Sprintf("%d-%02d-%02d", last.Year(), last.Month(), last.Day())
-					}
-				}
-			}
-		}
-	} else {
-		if st, ok := rp["startTime"].(string); ok && st != "" {
-			result["start"] = st
-		}
-		if et, ok := rp["endTime"].(string); ok && et != "" {
-			result["end"] = et
-		}
-	}
+	applyRollupWindow(result, rp)
 
 	// Extract all value fields from the type-specific object.
-	typeKey := findTypeKey(rp)
-	if typeKey != "" {
+	if typeKey := findTypeKey(rp); typeKey != "" {
 		if typeData, ok := rp[typeKey].(map[string]interface{}); ok {
 			for k, v := range typeData {
 				result[k] = v
@@ -341,6 +369,58 @@ func simplifyRollupPoint(rp map[string]interface{}) map[string]interface{} {
 	}
 
 	return result
+}
+
+// applyRollupWindow sets the date/start/end fields describing rp's time
+// window. dailyRollUp points carry a civil date; rollUp points carry
+// physical startTime/endTime instead.
+func applyRollupWindow(result, rp map[string]interface{}) {
+	cst, ok := rp["civilStartTime"].(map[string]interface{})
+	if !ok {
+		applyRollupPhysicalTimes(result, rp)
+		return
+	}
+	d, ok := cst[fieldDate].(map[string]interface{})
+	if !ok {
+		return
+	}
+	start := civilDateTime(d)
+	result[fieldDate] = formatCivilDate(d)
+	applyRollupMultiDayDates(result, rp, d, start)
+}
+
+func applyRollupPhysicalTimes(result, rp map[string]interface{}) {
+	if st, ok := rp[fieldStartTime].(string); ok && st != "" {
+		result[fieldStart] = st
+	}
+	if et, ok := rp[fieldEndTime].(string); ok && et != "" {
+		result[fieldEnd] = et
+	}
+}
+
+// applyRollupMultiDayDates replaces the single "date" field with explicit
+// startDate/endDate when the civil window spans more than one day.
+// Multi-day windows (--window-days > 1) must not be mislabeled as a single
+// day. The civil interval is closed-open, so the inclusive last day is
+// civilEndTime minus one day; 1-day buckets keep the single "date" field
+// for backward compatibility.
+func applyRollupMultiDayDates(result, rp map[string]interface{}, d map[string]interface{}, start time.Time) {
+	cet, ok := rp["civilEndTime"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	ed, ok := cet[fieldDate].(map[string]interface{})
+	if !ok {
+		return
+	}
+	end := civilDateTime(ed)
+	if end.Sub(start) <= 24*time.Hour {
+		return
+	}
+	delete(result, fieldDate)
+	result[fieldStartDate] = formatCivilDate(d)
+	last := end.AddDate(0, 0, -1)
+	result[fieldEndDate] = fmt.Sprintf("%d-%02d-%02d", last.Year(), last.Month(), last.Day())
 }
 
 // formatTimeWithOffset converts a UTC timestamp + offset into a local ISO 8601 string.
@@ -388,7 +468,7 @@ func parseOffsetSeconds(s string) int {
 func findTypeKey(dp map[string]interface{}) string {
 	for k := range dp {
 		switch k {
-		case "dataSource", "name", "civilStartTime", "civilEndTime":
+		case "dataSource", fieldName, "civilStartTime", "civilEndTime":
 			continue
 		default:
 			if _, ok := dp[k].(map[string]interface{}); ok {

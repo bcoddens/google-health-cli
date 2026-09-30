@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -46,24 +47,34 @@ const (
 // ScopePrefix is the common prefix for all Health API scopes.
 const ScopePrefix = "https://www.googleapis.com/auth/googlehealth."
 
+const (
+	cloudPlatformSuffix     = "cloud-platform"
+	categoryActivityFitness = "activity_and_fitness"
+	categoryHealthMetrics   = "health_metrics_and_measurements"
+	categorySleep           = "sleep"
+	categoryNutrition       = "nutrition"
+	categoryProfile         = "profile"
+	categorySettings        = "settings"
+)
+
 // AllScopes lists all available Health API OAuth scope suffixes.
 var AllScopes = []ScopeInfo{
-	{Suffix: "activity_and_fitness.readonly", Label: "Activity & Fitness (read)", Category: "activity_and_fitness"},
-	{Suffix: "activity_and_fitness", Label: "Activity & Fitness (read/write)", Category: "activity_and_fitness"},
-	{Suffix: "health_metrics_and_measurements.readonly", Label: "Health Metrics (read)", Category: "health_metrics_and_measurements"},
-	{Suffix: "health_metrics_and_measurements", Label: "Health Metrics (read/write)", Category: "health_metrics_and_measurements"},
-	{Suffix: "sleep.readonly", Label: "Sleep (read)", Category: "sleep"},
-	{Suffix: "sleep", Label: "Sleep (read/write)", Category: "sleep"},
-	{Suffix: "nutrition.readonly", Label: "Nutrition (read)", Category: "nutrition"},
-	{Suffix: "nutrition", Label: "Nutrition (read/write)", Category: "nutrition"},
-	{Suffix: "profile.readonly", Label: "Profile (read)", Category: "profile"},
-	{Suffix: "profile", Label: "Profile (read/write)", Category: "profile"},
-	{Suffix: "settings.readonly", Label: "Settings (read)", Category: "settings"},
-	{Suffix: "settings", Label: "Settings (read/write)", Category: "settings"},
+	{Suffix: "activity_and_fitness.readonly", Label: "Activity & Fitness (read)", Category: categoryActivityFitness},
+	{Suffix: categoryActivityFitness, Label: "Activity & Fitness (read/write)", Category: categoryActivityFitness},
+	{Suffix: "health_metrics_and_measurements.readonly", Label: "Health Metrics (read)", Category: categoryHealthMetrics},
+	{Suffix: categoryHealthMetrics, Label: "Health Metrics (read/write)", Category: categoryHealthMetrics},
+	{Suffix: "sleep.readonly", Label: "Sleep (read)", Category: categorySleep},
+	{Suffix: categorySleep, Label: "Sleep (read/write)", Category: categorySleep},
+	{Suffix: "nutrition.readonly", Label: "Nutrition (read)", Category: categoryNutrition},
+	{Suffix: categoryNutrition, Label: "Nutrition (read/write)", Category: categoryNutrition},
+	{Suffix: "profile.readonly", Label: "Profile (read)", Category: categoryProfile},
+	{Suffix: categoryProfile, Label: "Profile (read/write)", Category: categoryProfile},
+	{Suffix: "settings.readonly", Label: "Settings (read)", Category: categorySettings},
+	{Suffix: categorySettings, Label: "Settings (read/write)", Category: categorySettings},
 	{Suffix: "location.readonly", Label: "Location (read)", Category: "location"},
 	{Suffix: "ecg.readonly", Label: "Electrocardiogram (read)", Category: "ecg"},
 	{Suffix: "irn.readonly", Label: "Irregular Rhythm Notifications (read)", Category: "irn"},
-	{Suffix: "cloud-platform", Label: "Cloud Platform (manage webhook subscribers/subscriptions)", Category: "webhooks"},
+	{Suffix: cloudPlatformSuffix, Label: "Cloud Platform (manage webhook subscribers/subscriptions)", Category: "webhooks"},
 }
 
 // CloudPlatformScope is the full OAuth scope required for the project-level
@@ -83,7 +94,7 @@ func FullScope(suffix string) string {
 		return suffix
 	}
 	// cloud-platform is a Google-wide scope, not under the googlehealth. prefix.
-	if suffix == "cloud-platform" {
+	if suffix == cloudPlatformSuffix {
 		return CloudPlatformScope
 	}
 	return ScopePrefix + suffix
@@ -172,7 +183,8 @@ func ValidateAccessToken(ctx context.Context, accessToken string) (*TokenInfo, e
 		return nil, fmt.Errorf("malformed tokeninfo response: %w", err)
 	}
 	expires := 0
-	fmt.Sscanf(info.ExpiresIn, "%d", &expires)
+	// An unparsable expires_in is reported as 0 rather than failing validation.
+	_, _ = fmt.Sscanf(info.ExpiresIn, "%d", &expires)
 	return &TokenInfo{
 		Audience:  info.Audience,
 		ExpiresIn: expires,
@@ -189,21 +201,55 @@ func ScopePreset(name string) ([]string, error) {
 	case "":
 		return nil, fmt.Errorf("empty scope preset")
 	case "readonly":
-		var out []string
-		for _, s := range AllScopes {
-			if strings.HasSuffix(s.Suffix, ".readonly") {
-				out = append(out, s.Suffix)
-			}
-		}
-		return out, nil
+		return readonlyScopes(), nil
 	case "all":
-		out := make([]string, 0, len(AllScopes))
-		for _, s := range AllScopes {
-			out = append(out, s.Suffix)
-		}
-		return out, nil
+		return allDataScopes(), nil
 	}
 
+	out, err := expandCategories(name)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("scope preset %q resolved to no scopes", name)
+	}
+	if err := rejectMixedCloudPlatform(out, name); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// readonlyScopes returns every .readonly scope suffix across all categories.
+func readonlyScopes() []string {
+	var out []string
+	for _, s := range AllScopes {
+		if strings.HasSuffix(s.Suffix, ".readonly") {
+			out = append(out, s.Suffix)
+		}
+	}
+	return out
+}
+
+// allDataScopes returns every scope suffix except cloud-platform, which is
+// excluded: it is only for webhook management and data-plane endpoints
+// reject tokens that carry it. Request it explicitly (--scopes cloud-platform
+// / category "webhooks").
+func allDataScopes() []string {
+	out := make([]string, 0, len(AllScopes))
+	for _, s := range AllScopes {
+		if s.Suffix == cloudPlatformSuffix {
+			continue
+		}
+		out = append(out, s.Suffix)
+	}
+	return out
+}
+
+// expandCategories resolves a comma-separated list of category names (from
+// name, not the trimmed switch value used above — leading/trailing commas
+// and per-item whitespace are handled here) into scope suffixes, preferring
+// each category's .readonly variant when one exists.
+func expandCategories(name string) ([]string, error) {
 	known := make(map[string][]string)
 	for _, s := range AllScopes {
 		known[s.Category] = append(known[s.Category], s.Suffix)
@@ -218,21 +264,41 @@ func ScopePreset(name string) ([]string, error) {
 		if !ok {
 			return nil, fmt.Errorf("unknown scope preset or category %q (valid: readonly, all, or category names like 'sleep,activity_and_fitness')", c)
 		}
-		readonlyFound := false
-		for _, suffix := range matches {
-			if strings.HasSuffix(suffix, ".readonly") {
-				out = append(out, suffix)
-				readonlyFound = true
-			}
-		}
-		if !readonlyFound {
-			out = append(out, matches...)
-		}
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("scope preset %q resolved to no scopes", name)
+		out = append(out, categoryScopes(matches)...)
 	}
 	return out, nil
+}
+
+// categoryScopes prefers the .readonly suffixes within a category when any
+// exist, otherwise returns every suffix in the category (read/write pairs).
+func categoryScopes(matches []string) []string {
+	var readonly []string
+	for _, suffix := range matches {
+		if strings.HasSuffix(suffix, ".readonly") {
+			readonly = append(readonly, suffix)
+		}
+	}
+	if len(readonly) > 0 {
+		return readonly
+	}
+	return matches
+}
+
+// rejectMixedCloudPlatform reports an error if out mixes cloud-platform with
+// any other scope: a token carrying cloud-platform is rejected by the
+// data-plane endpoints, so combining it with any other scope yields a token
+// that is useless for both. Webhook management needs its own login (see
+// 'ghealth webhooks --help').
+func rejectMixedCloudPlatform(out []string, name string) error {
+	if len(out) <= 1 {
+		return nil
+	}
+	for _, s := range out {
+		if s == cloudPlatformSuffix {
+			return fmt.Errorf("scope preset %q mixes cloud-platform with data scopes; request 'webhooks' on its own and use a separate GHEALTH_CONFIG_DIR", name)
+		}
+	}
+	return nil
 }
 
 // TokenSource provides access tokens for API requests.
@@ -337,18 +403,49 @@ func OAuthConfig(cs *ClientSecret, scopes []string, redirectURL string) *oauth2.
 
 // SaveCredentials persists tokens to the credentials file.
 func SaveCredentials(creds *StoredCredentials) error {
-	path := config.CredentialsPath()
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-
 	data, err := json.MarshalIndent(creds, "", "  ")
 	if err != nil {
 		return err
 	}
+	return WriteSecretFile(config.CredentialsPath(), data)
+}
 
-	return os.WriteFile(path, data, 0600)
+// WriteSecretFile atomically writes data to path with mode 0600, creating the
+// parent directory (0700) if needed. os.WriteFile only applies its mode when
+// it creates the file, so a pre-existing looser file would keep its mode;
+// writing a fresh 0600 temp file and renaming it over the target avoids that.
+func WriteSecretFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	renamed = true
+	return nil
 }
 
 // LoadCredentials reads stored tokens from the credentials file.
@@ -655,7 +752,7 @@ func InteractiveLogin(cs *ClientSecret, scopes []string) (*oauth2.Token, error) 
 		}
 		if e := r.URL.Query().Get("error"); e != "" {
 			errCh <- fmt.Errorf("OAuth error: %s", e)
-			fmt.Fprintf(w, "<html><body><h2>Authorization failed: %s</h2></body></html>", e)
+			fmt.Fprintf(w, "<html><body><h2>Authorization failed: %s</h2></body></html>", html.EscapeString(e))
 			return
 		}
 		code := r.URL.Query().Get("code")
@@ -668,7 +765,8 @@ func InteractiveLogin(cs *ClientSecret, scopes []string) (*oauth2.Token, error) 
 		fmt.Fprint(w, "<html><body><h2>Authentication successful</h2><p>You can close this window.</p></body></html>")
 	})
 
-	srv := &http.Server{Handler: mux}
+	// ReadHeaderTimeout bounds slow-header clients on the loopback listener.
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			errCh <- err
@@ -830,14 +928,11 @@ func PendingAuthPath() string {
 
 func SavePendingAuth(p *PendingAuth) error {
 	path := PendingAuthPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	return WriteSecretFile(path, data)
 }
 
 func LoadPendingAuth() (*PendingAuth, error) {

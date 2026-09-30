@@ -26,14 +26,26 @@ import (
 	"strings"
 )
 
+// Output format names, shared across Print/PrintToFile's format switches.
+const (
+	formatJSON  = "json"
+	formatTable = "table"
+	formatCSV   = "csv"
+	rowDataKey  = "data"
+)
+
+// rowArrayKeys lists, in priority order, the object keys that may hold a
+// tabular row array in a Health API response (raw or simplified).
+var rowArrayKeys = []string{"dataPoints", "rollupDataPoints", rowDataKey, "items"}
+
 // Print outputs data in the specified format to stdout.
 func Print(format string, data json.RawMessage) error {
 	switch strings.ToLower(format) {
-	case "json":
+	case formatJSON:
 		return PrintJSON(data)
-	case "table":
+	case formatTable:
 		return PrintTable(data)
-	case "csv":
+	case formatCSV:
 		return PrintCSV(data)
 	default:
 		return PrintJSON(data)
@@ -43,60 +55,85 @@ func Print(format string, data json.RawMessage) error {
 // PrintToFile writes the formatted data to a file and prints a summary to stdout.
 // The summary includes row count, columns (for CSV), and a preview of the first few rows.
 func PrintToFile(format string, data json.RawMessage, filePath string) error {
-	// Format the data into a buffer.
-	var buf bytes.Buffer
 	switch strings.ToLower(format) {
-	case "csv":
-		rows := flattenRows(extractRows(data))
-		if len(rows) == 0 {
-			// Empty tabular result → write an empty CSV file (never a JSON dump);
-			// non-tabular → JSON fallback so the file stays readable.
-			if isListShaped(data) {
-				fwarnDroppedSignals(os.Stderr, data)
-				return writeFileWithSummary(filePath, nil, format, 0, nil)
-			}
-			return writeFileWithSummary(filePath, data, format, 0, nil)
-		}
-		fwarnDroppedSignals(os.Stderr, data)
-		if err := printRowsAsCSV(&buf, rows); err != nil {
+	case formatCSV:
+		return printToFileCSV(data, filePath)
+	case formatTable:
+		return printToFileTable(data, filePath)
+	default: // json
+		var buf bytes.Buffer
+		if err := writeIndentedJSON(&buf, data); err != nil {
 			return err
 		}
-		keys := sortedKeys(rows)
-		if err := os.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
-			return fmt.Errorf("failed to write %s: %w", filePath, err)
+		return writeFileWithSummary(filePath, buf.Bytes(), format, countDataPoints(data), nil)
+	}
+}
+
+// printToFileCSV implements PrintToFile's "csv" branch: an empty tabular
+// result writes an empty CSV file (never a JSON dump); a non-tabular
+// response falls back to a JSON file so it stays readable. A non-empty
+// result is written in full, then a <=3-row preview is printed to stdout
+// alongside a row-count/columns summary.
+func printToFileCSV(data json.RawMessage, filePath string) error {
+	rows := flattenRows(extractRows(data))
+	if len(rows) == 0 {
+		if isListShaped(data) {
+			fwarnDroppedSignals(os.Stderr, data)
+			return writeFileWithSummary(filePath, nil, formatCSV, 0, nil)
 		}
-		// Print summary with preview.
-		fmt.Fprintf(os.Stdout, "Wrote %d rows to %s\n\nColumns: %s\nPreview:\n", len(rows), filePath, strings.Join(keys, ", "))
-		// Print header + up to 3 rows as preview.
-		preview := &bytes.Buffer{}
-		previewRows := rows
-		if len(previewRows) > 3 {
-			previewRows = previewRows[:3]
-		}
-		printRowsAsCSV(preview, previewRows)
-		fmt.Fprint(os.Stdout, preview.String())
-		return nil
-	case "table":
-		rows := extractRows(data)
-		if len(rows) > 0 {
-			printRowsAsTable(&buf, rows)
-		} else {
-			var v interface{}
-			json.Unmarshal(data, &v)
-			enc := json.NewEncoder(&buf)
-			enc.SetIndent("", "  ")
-			enc.Encode(v)
-		}
-	default: // json
-		var v interface{}
-		json.Unmarshal(data, &v)
-		enc := json.NewEncoder(&buf)
-		enc.SetIndent("", "  ")
-		enc.Encode(v)
+		return writeFileWithSummary(filePath, data, formatCSV, 0, nil)
 	}
 
-	count := countDataPoints(data)
-	return writeFileWithSummary(filePath, buf.Bytes(), format, count, nil)
+	fwarnDroppedSignals(os.Stderr, data)
+	var buf bytes.Buffer
+	if err := printRowsAsCSV(&buf, rows); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write %s: %w", filePath, err)
+	}
+
+	keys := sortedKeys(rows)
+	fmt.Fprintf(os.Stdout, "Wrote %d rows to %s\n\nColumns: %s\nPreview:\n", len(rows), filePath, strings.Join(keys, ", "))
+	previewRows := rows
+	if len(previewRows) > 3 {
+		previewRows = previewRows[:3]
+	}
+	preview := &bytes.Buffer{}
+	if err := printRowsAsCSV(preview, previewRows); err != nil {
+		return err
+	}
+	fmt.Fprint(os.Stdout, preview.String())
+	return nil
+}
+
+// printToFileTable implements PrintToFile's "table" branch: rows render as
+// an aligned table (surfacing _hints/nextPageToken on stderr, matching the
+// CSV/stdout table contract); a non-tabular response falls back to JSON.
+func printToFileTable(data json.RawMessage, filePath string) error {
+	var buf bytes.Buffer
+	rows := extractRows(data)
+	if len(rows) > 0 {
+		fwarnDroppedSignals(os.Stderr, data)
+		if err := printRowsAsTable(&buf, rows); err != nil {
+			return err
+		}
+	} else if err := writeIndentedJSON(&buf, data); err != nil {
+		return err
+	}
+	return writeFileWithSummary(filePath, buf.Bytes(), formatTable, countDataPoints(data), nil)
+}
+
+// writeIndentedJSON pretty-prints data into buf, failing on invalid JSON
+// instead of silently writing "null". It indents the original bytes rather
+// than decoding into interface{} and re-encoding, which would round integers
+// above 2^53 through float64, rewrite 1.10 as 1.1, and reorder object keys.
+func writeIndentedJSON(buf *bytes.Buffer, data json.RawMessage) error {
+	if err := json.Indent(buf, data, "", "  "); err != nil {
+		return fmt.Errorf("invalid JSON response: %w", err)
+	}
+	buf.WriteByte('\n')
+	return nil
 }
 
 func writeFileWithSummary(filePath string, content []byte, format string, count int, keys []string) error {
@@ -115,10 +152,10 @@ func extractRows(data json.RawMessage) []map[string]interface{} {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(data, &obj); err != nil {
 		var rows []map[string]interface{}
-		json.Unmarshal(data, &rows)
+		_ = json.Unmarshal(data, &rows) // best effort: non-JSON input yields no rows
 		return rows
 	}
-	for _, key := range []string{"dataPoints", "rollupDataPoints", "data", "items"} {
+	for _, key := range rowArrayKeys {
 		if raw, ok := obj[key]; ok {
 			var rows []map[string]interface{}
 			if err := json.Unmarshal(raw, &rows); err == nil && len(rows) > 0 {
@@ -127,7 +164,7 @@ func extractRows(data json.RawMessage) []map[string]interface{} {
 		}
 	}
 	var rows []map[string]interface{}
-	json.Unmarshal(data, &rows)
+	_ = json.Unmarshal(data, &rows) // best effort: non-JSON input yields no rows
 	return rows
 }
 
@@ -155,7 +192,7 @@ func countDataPoints(data json.RawMessage) int {
 		}
 		return 0
 	}
-	for _, key := range []string{"dataPoints", "rollupDataPoints", "data", "items"} {
+	for _, key := range rowArrayKeys {
 		if raw, ok := obj[key]; ok {
 			var arr []json.RawMessage
 			if json.Unmarshal(raw, &arr) == nil {
@@ -168,16 +205,14 @@ func countDataPoints(data json.RawMessage) int {
 
 // PrintJSON outputs pretty-printed JSON.
 func PrintJSON(data json.RawMessage) error {
-	var v interface{}
-	if err := json.Unmarshal(data, &v); err != nil {
+	var buf bytes.Buffer
+	if err := writeIndentedJSON(&buf, data); err != nil {
 		// If it's not valid JSON, print raw.
 		fmt.Println(string(data))
 		return nil
 	}
-
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
+	_, err := os.Stdout.Write(buf.Bytes())
+	return err
 }
 
 // PrintTable outputs data as an aligned table. extractRows handles both
@@ -200,55 +235,44 @@ func printRowsAsTable(w io.Writer, rows []map[string]interface{}) error {
 		return nil
 	}
 
-	// Collect all keys.
-	keySet := make(map[string]bool)
+	keys := sortedKeys(rows)
+	widths := tableColumnWidths(keys, rows)
+
+	writeTableRow(w, keys, widths, func(k string) string { return strings.ToUpper(k) })
 	for _, row := range rows {
-		for k := range row {
-			keySet[k] = true
-		}
+		writeTableRow(w, keys, widths, func(k string) string { return formatValue(row[k]) })
 	}
 
-	keys := make([]string, 0, len(keySet))
-	for k := range keySet {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	return nil
+}
 
-	// Calculate column widths.
+// tableColumnWidths computes the print width of each column: at least the
+// uppercased header length, widened to fit the longest formatted value.
+func tableColumnWidths(keys []string, rows []map[string]interface{}) map[string]int {
 	widths := make(map[string]int)
 	for _, k := range keys {
 		widths[k] = len(strings.ToUpper(k))
 	}
 	for _, row := range rows {
 		for _, k := range keys {
-			val := formatValue(row[k])
-			if len(val) > widths[k] {
+			if val := formatValue(row[k]); len(val) > widths[k] {
 				widths[k] = len(val)
 			}
 		}
 	}
+	return widths
+}
 
-	// Print header.
+// writeTableRow prints one space-padded row (header or data), using cell
+// to render each column's value for the given key.
+func writeTableRow(w io.Writer, keys []string, widths map[string]int, cell func(string) string) {
 	for i, k := range keys {
 		if i > 0 {
 			fmt.Fprint(w, "  ")
 		}
-		fmt.Fprintf(w, "%-*s", widths[k], strings.ToUpper(k))
+		fmt.Fprintf(w, "%-*s", widths[k], cell(k))
 	}
 	fmt.Fprintln(w)
-
-	// Print rows.
-	for _, row := range rows {
-		for i, k := range keys {
-			if i > 0 {
-				fmt.Fprint(w, "  ")
-			}
-			fmt.Fprintf(w, "%-*s", widths[k], formatValue(row[k]))
-		}
-		fmt.Fprintln(w)
-	}
-
-	return nil
 }
 
 func formatValue(v interface{}) string {
@@ -309,7 +333,7 @@ func isListShaped(data json.RawMessage) bool {
 	if json.Unmarshal(data, &obj) != nil {
 		return false
 	}
-	for _, key := range []string{"dataPoints", "rollupDataPoints", "data", "items"} {
+	for _, key := range rowArrayKeys {
 		if _, ok := obj[key]; ok {
 			return true
 		}
@@ -376,18 +400,7 @@ func printRowsAsCSV(w io.Writer, rows []map[string]interface{}) error {
 		return nil
 	}
 
-	keySet := make(map[string]bool)
-	for _, row := range rows {
-		for k := range row {
-			keySet[k] = true
-		}
-	}
-
-	keys := make([]string, 0, len(keySet))
-	for k := range keySet {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := sortedKeys(rows)
 
 	cw := csv.NewWriter(w)
 	defer cw.Flush()

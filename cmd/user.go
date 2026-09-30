@@ -45,13 +45,13 @@ var userPairedDevicesCmd = &cobra.Command{
 }
 
 var userPairedDevicesListCmd = &cobra.Command{
-	Use:   "list",
+	Use:   opList,
 	Short: "List the user's paired devices",
 	RunE:  runUserPairedDevicesList,
 }
 
 var userPairedDevicesGetCmd = &cobra.Command{
-	Use:   "get",
+	Use:   opGet,
 	Short: "Get a single paired device by ID",
 	RunE:  runUserPairedDevicesGet,
 }
@@ -64,13 +64,13 @@ var userProfileCmd = &cobra.Command{
 }
 
 var userProfileGetCmd = &cobra.Command{
-	Use:   "get",
+	Use:   opGet,
 	Short: "Get the user's profile",
 	RunE:  runUserProfileGet,
 }
 
 var userProfileUpdateCmd = &cobra.Command{
-	Use:   "update",
+	Use:   opUpdate,
 	Short: "Update the user's profile",
 	RunE:  runUserProfileUpdate,
 }
@@ -81,13 +81,13 @@ var userSettingsCmd = &cobra.Command{
 }
 
 var userSettingsGetCmd = &cobra.Command{
-	Use:   "get",
+	Use:   opGet,
 	Short: "Get the user's settings",
 	RunE:  runUserSettingsGet,
 }
 
 var userSettingsUpdateCmd = &cobra.Command{
-	Use:   "update",
+	Use:   opUpdate,
 	Short: "Update the user's settings",
 	RunE:  runUserSettingsUpdate,
 }
@@ -146,7 +146,7 @@ func runUserPairedDevicesGet(cmd *cobra.Command, args []string) error {
 
 func doUserGet(path string) error {
 	c := newClient()
-	req := &client.Request{Method: "GET", Path: path}
+	req := &client.Request{Method: httpMethodGet, Path: path}
 
 	if flagDryRun {
 		data, err := c.DryRun(req)
@@ -158,7 +158,7 @@ func doUserGet(path string) error {
 
 	resp, err := c.Do(req)
 	if err != nil {
-		if cliErr, ok := err.(*client.CLIError); ok {
+		if cliErr, ok := client.AsCLIError(err); ok {
 			return cliErr
 		}
 		return client.NewAPIError(0, err.Error(), "")
@@ -199,7 +199,7 @@ func doUserUpdate(path string) error {
 
 	resp, err := c.Do(req)
 	if err != nil {
-		if cliErr, ok := err.(*client.CLIError); ok {
+		if cliErr, ok := client.AsCLIError(err); ok {
 			return cliErr
 		}
 		return client.NewAPIError(0, err.Error(), "")

@@ -28,6 +28,40 @@ go vet ./...
 
 Verify against the live API: `ghealth auth status`, then `ghealth data steps daily-rollup --from 2026-03-22 --to 2026-03-29`.
 
+## Quality gates
+
+`make check` runs everything CI enforces (needs `golangci-lint` v2, `govulncheck`, `shellcheck`; `gitleaks` for `make secrets`):
+
+| Target | What it checks |
+|--------|----------------|
+| `make fmt-check` / `make fmt` | gofmt cleanliness / rewrite |
+| `make vet`, `make lint` | `go vet`, golangci-lint (`.golangci.yml`; gosec exclusions are scoped and commented) |
+| `make test` | unit tests with `-race` |
+| `make cover` | tests + total-coverage gate (`COVERAGE_MIN`, currently 80%; measured 81.7%) |
+| `make vuln` | `govulncheck ./...` |
+| `make shellcheck` | `scripts/*.sh` |
+| `make secrets` | gitleaks full-history scan |
+
+External reviewers (both optional locally, both keep secrets out of the repo):
+
+- **SonarQube**: `cp .env.example .env`, set `SONAR_TOKEN`, then `make sonar` (`scripts/sonar-scan.sh --fresh-coverage`; exit code mirrors the quality gate). Needs the local SonarQube container. Sonar reports *line* coverage, which differs from the Go statement coverage used by `make cover`.
+- **CodeRabbit**: `make coderabbit` (`scripts/coderabbit-review.sh --base main`) runs the local CLI; the GitHub app reads `.coderabbit.yaml` on PRs.
+
+Use `client.AsCLIError(err)` instead of `err.(*client.CLIError)`, and write token/secret files with `auth.WriteSecretFile` (mode 0600, atomic) — never a bare `os.WriteFile`.
+
+## Local end-to-end harness
+
+`make e2e-local` builds and exercises the real `ghealth` binary against an
+isolated local fake Health API. Once Go modules are available, it needs no
+credentials, Docker, or external network access and is intentionally not part
+of CI.
+
+Use `go run -tags local_e2e ./tools/local-e2e -run pagination -verbose` to run
+one scenario. Add `-keep` to retain the temporary workspace for diagnosis.
+
+The local harness does not cover browser OAuth/token exchange, live discovery,
+webhooks/GCP IAM, or live Health API semantics; those require external systems.
+
 ## Workflow
 
 - Feature branches + PRs — never commit to main directly

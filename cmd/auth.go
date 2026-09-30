@@ -42,6 +42,19 @@ var (
 	authStatusValidate bool
 )
 
+// authField* are the JSON field/flag-name/command-name strings repeated
+// across the auth subcommands' output shapes (go:S1192).
+const (
+	authFieldStatus          = "status"
+	authFieldAuthenticated   = "authenticated"
+	authFieldEmail           = "email"
+	authFieldScopes          = "scopes"
+	authFieldExpiry          = "expiry"
+	authFieldMessage         = "message"
+	authFieldAuthMethod      = "auth_method"
+	authFieldCredentialsPath = "credentials_path"
+)
+
 // defaultScopes are the readonly scopes requested when no scopes are specified
 // and no profile is configured.
 var defaultScopes = []string{
@@ -89,7 +102,7 @@ var authLogoutCmd = &cobra.Command{
 }
 
 var authStatusCmd = &cobra.Command{
-	Use:   "status",
+	Use:   authFieldStatus,
 	Short: "Show current authentication status",
 	Long: `Show current authentication status.
 
@@ -146,7 +159,7 @@ func init() {
 
 	authLoginCmd.Flags().BoolVar(&authLoginNonInteractive, "non-interactive", false, "Print an auth URL as JSON and save pending state; complete with --complete <code>")
 	authLoginCmd.Flags().StringVar(&authLoginComplete, "complete", "", "Exchange the given authorization code (paired with a prior --non-interactive call)")
-	authLoginCmd.Flags().StringVar(&authLoginScopes, "scopes", "", "Comma-separated scope suffixes (see 'ghealth schema scopes')")
+	authLoginCmd.Flags().StringVar(&authLoginScopes, authFieldScopes, "", "Comma-separated scope suffixes (see 'ghealth schema scopes')")
 	authLoginCmd.Flags().StringVar(&authLoginScopesPreset, "scopes-preset", "", "Scope preset: readonly | all | comma-separated category names")
 
 	authImportCmd.Flags().StringVar(&authImportFile, "file", "", "Read credentials JSON from this file instead of stdin")
@@ -265,10 +278,10 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 			return client.NewConfigError(fmt.Sprintf("failed to save credentials: %v", err), "")
 		}
 		result := map[string]interface{}{
-			"status": "authenticated",
-			"email":  email,
-			"scopes": scopes,
-			"expiry": tok.Expiry.Format(time.RFC3339),
+			authFieldStatus: authFieldAuthenticated,
+			authFieldEmail:  email,
+			authFieldScopes: scopes,
+			authFieldExpiry: tok.Expiry.Format(time.RFC3339),
 		}
 		data, _ := json.MarshalIndent(result, "", "  ")
 		fmt.Fprintln(os.Stdout, string(data))
@@ -286,8 +299,8 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 			return client.NewConfigError(err.Error(), "")
 		}
 		result := map[string]interface{}{
-			"auth_url": authURL,
-			"scopes":   scopes,
+			"auth_url":      authURL,
+			authFieldScopes: scopes,
 			"instructions": []string{
 				"1. Open auth_url in a browser and authorize ghealth.",
 				"2. The browser will redirect to a URL that may fail to load — that's expected.",
@@ -322,10 +335,10 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 	}
 
 	result := map[string]interface{}{
-		"status": "authenticated",
-		"email":  email,
-		"scopes": scopes,
-		"expiry": tok.Expiry.Format(time.RFC3339),
+		authFieldStatus: authFieldAuthenticated,
+		authFieldEmail:  email,
+		authFieldScopes: scopes,
+		authFieldExpiry: tok.Expiry.Format(time.RFC3339),
 	}
 	data, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Fprintln(os.Stdout, string(data))
@@ -341,7 +354,7 @@ func runAuthLogout(cmd *cobra.Command, args []string) error {
 	path := config.CredentialsPath()
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
-			result := map[string]string{"status": "not_authenticated", "message": "No stored credentials found; pending auth state cleared if any"}
+			result := map[string]string{authFieldStatus: "not_authenticated", authFieldMessage: "No stored credentials found; pending auth state cleared if any"}
 			data, _ := json.MarshalIndent(result, "", "  ")
 			fmt.Fprintln(os.Stdout, string(data))
 			return nil
@@ -349,7 +362,7 @@ func runAuthLogout(cmd *cobra.Command, args []string) error {
 		return client.NewConfigError(fmt.Sprintf("failed to remove credentials: %v", err), "")
 	}
 
-	result := map[string]string{"status": "logged_out", "message": "Stored credentials removed"}
+	result := map[string]string{authFieldStatus: "logged_out", authFieldMessage: "Stored credentials removed"}
 	data, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Fprintln(os.Stdout, string(data))
 	return nil
@@ -361,66 +374,13 @@ func runAuthStatus(cmd *cobra.Command, args []string) error {
 	// claim authenticated:true without --validate, because the token might be
 	// expired/revoked and we have no local expiry to check against.
 	if envTok := os.Getenv("GHEALTH_ACCESS_TOKEN"); envTok != "" {
-		result := map[string]interface{}{
-			"auth_method": "env_token",
-			"configured":  true,
-		}
-		if authStatusValidate {
-			info, err := auth.ValidateAccessToken(context.Background(), envTok)
-			if err != nil {
-				result["authenticated"] = false
-				result["validation_error"] = err.Error()
-			} else {
-				result["authenticated"] = true
-				result["expires_in"] = info.ExpiresIn
-				result["scope"] = info.Scope
-				if info.Email != "" {
-					result["email"] = info.Email
-				}
-			}
-		} else {
-			result["validated"] = false
-			result["note"] = "GHEALTH_ACCESS_TOKEN is set; pass --validate to verify it against Google's tokeninfo endpoint"
-		}
-		data, _ := json.MarshalIndent(result, "", "  ")
-		fmt.Fprintln(os.Stdout, string(data))
-		return nil
+		return printAuthStatus(buildEnvTokenStatus(envTok))
 	}
 
 	// Credentials-file mode. Same posture as env-token: we know it's pointing
 	// somewhere, but we can't prove validity without a network call.
 	if envFile := os.Getenv("GHEALTH_CREDENTIALS_FILE"); envFile != "" {
-		result := map[string]interface{}{
-			"auth_method":      "credentials_file",
-			"credentials_path": envFile,
-			"configured":       true,
-		}
-		if authStatusValidate {
-			// Best-effort: try to extract a current access token via the same
-			// path the runtime would use, then validate it.
-			fs, fsErr := auth.NewFileTokenSource()
-			var tok string
-			if fsErr == nil {
-				tok, fsErr = fs.Token()
-			}
-			if fsErr != nil {
-				result["authenticated"] = false
-				result["validation_error"] = fsErr.Error()
-			} else if info, err := auth.ValidateAccessToken(context.Background(), tok); err != nil {
-				result["authenticated"] = false
-				result["validation_error"] = err.Error()
-			} else {
-				result["authenticated"] = true
-				result["expires_in"] = info.ExpiresIn
-				result["scope"] = info.Scope
-			}
-		} else {
-			result["validated"] = false
-			result["note"] = "Credentials file is configured; pass --validate to verify the token"
-		}
-		data, _ := json.MarshalIndent(result, "", "  ")
-		fmt.Fprintln(os.Stdout, string(data))
-		return nil
+		return printAuthStatus(buildCredentialsFileStatus(envFile))
 	}
 
 	creds, err := auth.LoadCredentials()
@@ -433,33 +393,114 @@ func runAuthStatus(cmd *cobra.Command, args []string) error {
 		return client.NewAuthError("Not authenticated", suggestNotAuthenticated())
 	}
 
-	expired := time.Now().After(creds.Expiry)
+	return printAuthStatus(buildStoredCredentialsStatus(creds))
+}
 
-	result := map[string]interface{}{
-		"authenticated":    !expired,
-		"email":            creds.Email,
-		"scopes":           creds.Scopes,
-		"expiry":           creds.Expiry.Format(time.RFC3339),
-		"expired":          expired,
-		"auth_method":      "oauth",
-		"credentials_path": config.CredentialsPath(),
-	}
-
-	if authStatusValidate {
-		info, err := auth.ValidateAccessToken(context.Background(), creds.AccessToken)
-		if err != nil {
-			result["authenticated"] = false
-			result["validation_error"] = err.Error()
-		} else {
-			result["authenticated"] = true
-			result["expires_in"] = info.ExpiresIn
-			result["scope"] = info.Scope
-		}
-	}
-
+// printAuthStatus writes the auth-status result map as indented JSON to
+// stdout, matching the exact output shape produced by every runAuthStatus
+// branch.
+func printAuthStatus(result map[string]interface{}) error {
 	data, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Fprintln(os.Stdout, string(data))
 	return nil
+}
+
+// validateAuthToken hits Google's tokeninfo endpoint for the given access
+// token, shared by all three auth-status modes.
+func validateAuthToken(token string) (*auth.TokenInfo, error) {
+	return auth.ValidateAccessToken(context.Background(), token)
+}
+
+// buildEnvTokenStatus builds the auth-status result for the
+// GHEALTH_ACCESS_TOKEN mode.
+func buildEnvTokenStatus(envTok string) map[string]interface{} {
+	result := map[string]interface{}{
+		authFieldAuthMethod: "env_token",
+		"configured":        true,
+	}
+	if !authStatusValidate {
+		result["validated"] = false
+		result["note"] = "GHEALTH_ACCESS_TOKEN is set; pass --validate to verify it against Google's tokeninfo endpoint"
+		return result
+	}
+	info, err := validateAuthToken(envTok)
+	if err != nil {
+		result[authFieldAuthenticated] = false
+		result["validation_error"] = err.Error()
+		return result
+	}
+	result[authFieldAuthenticated] = true
+	result["expires_in"] = info.ExpiresIn
+	result["scope"] = info.Scope
+	if info.Email != "" {
+		result[authFieldEmail] = info.Email
+	}
+	return result
+}
+
+// buildCredentialsFileStatus builds the auth-status result for the
+// GHEALTH_CREDENTIALS_FILE mode.
+func buildCredentialsFileStatus(envFile string) map[string]interface{} {
+	result := map[string]interface{}{
+		authFieldAuthMethod:      "credentials_file",
+		authFieldCredentialsPath: envFile,
+		"configured":             true,
+	}
+	if !authStatusValidate {
+		result["validated"] = false
+		result["note"] = "Credentials file is configured; pass --validate to verify the token"
+		return result
+	}
+	// Best-effort: try to extract a current access token via the same path
+	// the runtime would use, then validate it.
+	fs, fsErr := auth.NewFileTokenSource()
+	var tok string
+	if fsErr == nil {
+		tok, fsErr = fs.Token()
+	}
+	if fsErr != nil {
+		result[authFieldAuthenticated] = false
+		result["validation_error"] = fsErr.Error()
+		return result
+	}
+	info, err := validateAuthToken(tok)
+	if err != nil {
+		result[authFieldAuthenticated] = false
+		result["validation_error"] = err.Error()
+		return result
+	}
+	result[authFieldAuthenticated] = true
+	result["expires_in"] = info.ExpiresIn
+	result["scope"] = info.Scope
+	return result
+}
+
+// buildStoredCredentialsStatus builds the auth-status result for the normal
+// OAuth (stored credentials) mode.
+func buildStoredCredentialsStatus(creds *auth.StoredCredentials) map[string]interface{} {
+	expired := time.Now().After(creds.Expiry)
+	result := map[string]interface{}{
+		authFieldAuthenticated:   !expired,
+		authFieldEmail:           creds.Email,
+		authFieldScopes:          creds.Scopes,
+		authFieldExpiry:          creds.Expiry.Format(time.RFC3339),
+		"expired":                expired,
+		authFieldAuthMethod:      "oauth",
+		authFieldCredentialsPath: config.CredentialsPath(),
+	}
+	if !authStatusValidate {
+		return result
+	}
+	info, err := validateAuthToken(creds.AccessToken)
+	if err != nil {
+		result[authFieldAuthenticated] = false
+		result["validation_error"] = err.Error()
+		return result
+	}
+	result[authFieldAuthenticated] = true
+	result["expires_in"] = info.ExpiresIn
+	result["scope"] = info.Scope
+	return result
 }
 
 func runAuthRefresh(cmd *cobra.Command, args []string) error {
@@ -502,8 +543,8 @@ func runAuthRefresh(cmd *cobra.Command, args []string) error {
 	}
 
 	result := map[string]interface{}{
-		"status":     "refreshed",
-		"new_expiry": newTok.Expiry.Format(time.RFC3339),
+		authFieldStatus: "refreshed",
+		"new_expiry":    newTok.Expiry.Format(time.RFC3339),
 	}
 	data, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Fprintln(os.Stdout, string(data))
@@ -574,11 +615,11 @@ func runAuthImport(cmd *cobra.Command, args []string) error {
 	}
 
 	result := map[string]interface{}{
-		"status":           "imported",
-		"email":            creds.Email,
-		"scopes":           creds.Scopes,
-		"expiry":           creds.Expiry.Format(time.RFC3339),
-		"credentials_path": config.CredentialsPath(),
+		authFieldStatus:          "imported",
+		authFieldEmail:           creds.Email,
+		authFieldScopes:          creds.Scopes,
+		authFieldExpiry:          creds.Expiry.Format(time.RFC3339),
+		authFieldCredentialsPath: config.CredentialsPath(),
 	}
 	if creds.RefreshToken == "" {
 		// Access-token-only imports are allowed but degraded: no refresh path,

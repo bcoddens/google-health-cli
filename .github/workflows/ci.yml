@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-and-unit:
+    name: Quality and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history, not the default shallow clone: the gitleaks step
+          # below scans git history, not just the working tree.
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Latest stable, not go.mod's floor: govulncheck also audits the
+          # standard library of the toolchain that builds the binary. The
+          # floor itself is covered by the unit-min-go job.
+          go-version: stable
+      - name: Format check
+        run: make fmt-check
+      - name: Vet
+        run: make vet
+      - name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+      - name: Shellcheck
+        run: make shellcheck
+      - name: Workflow lint (actionlint)
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Vulnerability scan (govulncheck)
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - name: Secret scan (gitleaks)
+        # CI backstop for the pre-commit gitleaks hook, which only runs locally
+        # and only against staged content. Installs a pinned release, verifying
+        # the download against gitleaks' own published checksums file — bump
+        # GITLEAKS_VERSION manually; Dependabot does not track ad hoc curl pins.
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          # Keep the asset's real filename: the checksums file is keyed by it,
+          # so renaming before `sha256sum -c` makes verification a no-op that
+          # exits 1 ("no file was verified").
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -fsSL -o "${asset}" "${base}/${asset}"
+          curl -fsSL -o checksums.txt "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          sha256sum --ignore-missing -c checksums.txt
+          tar -xzf "${asset}" gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          rm -f "${asset}" checksums.txt gitleaks
+          gitleaks detect --source . --config .gitleaks.toml --no-banner --redact
+      - name: Build
+        run: go build -o /dev/null .
+      - name: Test with coverage gate
+        run: make cover
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-report
+          path: reports/coverage.out
+          if-no-files-found: warn
+
+  unit-min-go:
+    # go.mod declares the minimum supported Go version; the job above runs the
+    # newest toolchain, this one catches use of newer language/stdlib features.
+    name: Unit tests (go.mod minimum Go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: make test

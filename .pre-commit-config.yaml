@@ -1,0 +1,47 @@
+# `pre-commit install` wires both stages: fast static checks on commit, the
+# full test suite (with the coverage gate) on push.
+default_install_hook_types: [pre-commit, pre-push]
+# Without this, every hook below would also re-run on push.
+default_stages: [pre-commit]
+
+repos:
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        entry: make fmt-check
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: shellcheck
+        name: Shellcheck
+        # -x: pre-commit may batch files across invocations; without -x,
+        # shellcheck refuses to open a `source`d file that isn't in that
+        # invocation's own argument list (SC1091).
+        entry: shellcheck -x
+        language: system
+        files: ^scripts/.*\.sh$
+      - id: gitleaks
+        name: Gitleaks (staged secret scan)
+        entry: gitleaks protect --staged --config .gitleaks.toml --no-banner
+        language: system
+        pass_filenames: false
+      - id: go-test
+        name: Go tests + coverage gate
+        entry: make cover
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

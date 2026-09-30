@@ -67,7 +67,7 @@ func init() {
 // Execute runs the root command and returns the exit code.
 func Execute() int {
 	if err := rootCmd.Execute(); err != nil {
-		if cliErr, ok := err.(*client.CLIError); ok {
+		if cliErr, ok := client.AsCLIError(err); ok {
 			return client.WriteError(cliErr)
 		}
 		return client.WriteError(client.NewValidationError(err.Error(), ""))

@@ -56,7 +56,7 @@ func EnsureEnvelope(data json.RawMessage) json.RawMessage {
 	}
 
 	// Rename the legacy/alternate row containers to dataPoints.
-	for _, key := range []string{"rollupDataPoints", "data", "items"} {
+	for _, key := range []string{"rollupDataPoints", rowDataKey, "items"} {
 		if rows, ok := obj[key]; ok {
 			delete(obj, key)
 			obj["dataPoints"] = rows

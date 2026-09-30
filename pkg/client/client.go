@@ -78,6 +78,9 @@ type Response struct {
 	Headers    http.Header
 }
 
+// contentTypeHeader is the HTTP header name for the request/response media type.
+const contentTypeHeader = "Content-Type"
+
 // Do executes an API request with auth, retry, and error handling.
 func (c *Client) Do(req *Request) (*Response, error) {
 	var lastErr error
@@ -86,94 +89,134 @@ func (c *Client) Do(req *Request) (*Response, error) {
 
 	for attempt := 0; attempt <= MaxRetries; attempt++ {
 		if attempt > 0 {
-			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
-			if nextDelay > backoff {
-				backoff = nextDelay // honor Retry-After when it's longer than our backoff
-			}
-			sleep(backoff)
+			sleep(retryBackoff(attempt, nextDelay))
 		}
 		nextDelay = 0
 
 		resp, err := c.doOnce(req)
 		if err != nil {
 			// Token acquisition failures are deterministic — retrying with
-			// backoff cannot help. Fail fast. A transport-level failure
-			// reaching the token endpoint is a network problem (exit 4) —
-			// re-login would fail the same way; everything else is an auth
-			// problem (exit 2) with the documented recovery hint.
-			var authErr *AuthError
-			if errors.As(err, &authErr) {
-				if isAuthNetworkError(err) {
-					return nil, NewNetworkError(fmt.Sprintf("could not reach the OAuth token endpoint: %v", authErr.Err))
-				}
-				return nil, NewAuthError(authErr.Error(), "Run 'ghealth auth login' to re-authenticate")
+			// backoff cannot help. Fail fast.
+			if terminalErr, retryable := mapTransportError(err); !retryable {
+				return nil, terminalErr
 			}
 			lastErr = err
 			// Network errors: retry
 			continue
 		}
 
-		// Success
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return resp, nil
+		outcome := c.classifyResponse(resp, refreshed)
+		if outcome.done {
+			return outcome.resp, outcome.err
 		}
-
-		// 401: force-refresh the token once (in case it was revoked, or expired
-		// mid-retry-sequence while the local expiry was still in the future) and
-		// retry. Gated on a flag rather than attempt==0 so a 401 arriving after
-		// earlier 5xx/429 retries still triggers a refresh.
-		if resp.StatusCode == 401 && !refreshed {
-			refreshed = true
-			if inv, ok := c.tokenSource.(auth.Invalidator); ok {
-				inv.Invalidate()
-			}
-			lastErr = parseAPIError(resp)
-			continue
-		}
-
-		// 403 "insufficient authentication scopes": an access token can pass the
-		// local validity check yet already be expired server-side, because the
-		// oauth2 library treats a token as valid until ~10s before its expiry.
-		// Within that skew window the API may return this 403 rather than a 401
-		// (observed live: the first call after expiry returned it; the next
-		// succeeded). A genuine scope gap reproduces identically after a refresh,
-		// so one refresh+retry distinguishes a stale token from a real policy
-		// denial without masking the latter.
-		if resp.StatusCode == 403 && !refreshed && isStaleScopeError(resp) {
-			refreshed = true
-			if inv, ok := c.tokenSource.(auth.Invalidator); ok {
-				inv.Invalidate()
-			}
-			lastErr = parseAPIError(resp)
-			continue
-		}
-
-		// 429: honor Retry-After, retry
-		if resp.StatusCode == 429 {
-			nextDelay = parseRetryAfter(resp.Headers)
-			lastErr = parseAPIError(resp)
-			continue
-		}
-
-		// 5xx: retry (also honor Retry-After if the server sent one)
-		if resp.StatusCode >= 500 {
-			nextDelay = parseRetryAfter(resp.Headers)
-			lastErr = parseAPIError(resp)
-			continue
-		}
-
-		// 4xx (not 401/429): don't retry
-		return resp, parseAPIError(resp)
+		refreshed = refreshed || outcome.refresh
+		nextDelay = outcome.delay
+		lastErr = outcome.err
 	}
 
 	// Retries exhausted. An HTTP-status error keeps its API classification
 	// (exit 1, e.g. persistent 429/5xx); anything else never got an HTTP
 	// response and is a network problem (exit 4).
+	return nil, finalRetryError(lastErr)
+}
+
+// retryBackoff computes the delay before the given retry attempt (1-based),
+// honoring a server-requested Retry-After delay when it's longer than the
+// exponential backoff that would otherwise apply.
+func retryBackoff(attempt int, serverDelay time.Duration) time.Duration {
+	backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+	if serverDelay > backoff {
+		backoff = serverDelay // honor Retry-After when it's longer than our backoff
+	}
+	return backoff
+}
+
+// mapTransportError classifies a doOnce transport-level error. Auth
+// (token-acquisition) failures are deterministic and never retried: a
+// transport-level failure reaching the token endpoint is a network problem
+// (exit 4) — re-login would fail the same way; everything else is an auth
+// problem (exit 2) with the documented recovery hint. Any other error is
+// retryable (network errors reaching the API itself).
+func mapTransportError(err error) (terminalErr error, retryable bool) {
+	var authErr *AuthError
+	if !errors.As(err, &authErr) {
+		return nil, true
+	}
+	if isAuthNetworkError(err) {
+		return NewNetworkError(fmt.Sprintf("could not reach the OAuth token endpoint: %v", authErr.Err)), false
+	}
+	return NewAuthError(authErr.Error(), "Run 'ghealth auth login' to re-authenticate"), false
+}
+
+// retryOutcome is the result of classifying one HTTP response within the
+// retry loop: either a final answer for Do to return (done), or state to
+// carry into the next attempt.
+type retryOutcome struct {
+	done    bool
+	resp    *Response
+	err     error // done: error to return; !done: error to remember as lastErr
+	delay   time.Duration
+	refresh bool
+}
+
+// classifyResponse decides whether a non-transport-error response ends the
+// retry loop (success, or a non-retryable 4xx) or should be retried (401/403
+// refresh-and-retry, 429/5xx backoff-and-retry).
+func (c *Client) classifyResponse(resp *Response, refreshed bool) retryOutcome {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return retryOutcome{done: true, resp: resp}
+	}
+
+	// 401: force-refresh the token once (in case it was revoked, or expired
+	// mid-retry-sequence while the local expiry was still in the future) and
+	// retry. Gated on a flag rather than attempt==0 so a 401 arriving after
+	// earlier 5xx/429 retries still triggers a refresh.
+	if resp.StatusCode == 401 && !refreshed {
+		c.invalidateToken()
+		return retryOutcome{err: parseAPIError(resp), refresh: true}
+	}
+
+	// 403 "insufficient authentication scopes": an access token can pass the
+	// local validity check yet already be expired server-side, because the
+	// oauth2 library treats a token as valid until ~10s before its expiry.
+	// Within that skew window the API may return this 403 rather than a 401
+	// (observed live: the first call after expiry returned it; the next
+	// succeeded). A genuine scope gap reproduces identically after a refresh,
+	// so one refresh+retry distinguishes a stale token from a real policy
+	// denial without masking the latter.
+	if resp.StatusCode == 403 && !refreshed && isStaleScopeError(resp) {
+		c.invalidateToken()
+		return retryOutcome{err: parseAPIError(resp), refresh: true}
+	}
+
+	// 429: honor Retry-After, retry. 5xx: retry (also honor Retry-After if
+	// the server sent one).
+	if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+		return retryOutcome{err: parseAPIError(resp), delay: parseRetryAfter(resp.Headers)}
+	}
+
+	// 4xx (not 401/429): don't retry
+	return retryOutcome{done: true, resp: resp, err: parseAPIError(resp)}
+}
+
+// invalidateToken forces the next Token() call to fetch fresh credentials, if
+// the configured token source supports it.
+func (c *Client) invalidateToken() {
+	if inv, ok := c.tokenSource.(auth.Invalidator); ok {
+		inv.Invalidate()
+	}
+}
+
+// finalRetryError converts the last error seen after retries are exhausted
+// into the CLIError Do returns: an HTTP-status error keeps its API
+// classification (exit 1, e.g. persistent 429/5xx); anything else never got
+// an HTTP response and is a network problem (exit 4).
+func finalRetryError(lastErr error) error {
 	var cliErr *CLIError
 	if errors.As(lastErr, &cliErr) {
-		return nil, cliErr
+		return cliErr
 	}
-	return nil, NewNetworkError(fmt.Sprintf("request failed after %d attempts: %v", MaxRetries+1, lastErr))
+	return NewNetworkError(fmt.Sprintf("request failed after %d attempts: %v", MaxRetries+1, lastErr))
 }
 
 // isStaleScopeError reports whether a 403 body is the "insufficient
@@ -232,9 +275,9 @@ func (c *Client) doOnce(req *Request) (*Response, error) {
 	httpReq.Header.Set("x-goog-api-client", "ghealth/"+version.Version)
 
 	if req.ContentType != "" {
-		httpReq.Header.Set("Content-Type", req.ContentType)
+		httpReq.Header.Set(contentTypeHeader, req.ContentType)
 	} else if len(req.Body) > 0 {
-		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set(contentTypeHeader, "application/json")
 	}
 
 	resp, err := c.httpClient.Do(httpReq)
@@ -273,7 +316,7 @@ func (c *Client) DryRun(req *Request) (json.RawMessage, error) {
 		"headers": map[string]string{
 			"Authorization":     "Bearer [REDACTED]",
 			"x-goog-api-client": "ghealth/" + version.Version,
-			"Content-Type":      "application/json",
+			contentTypeHeader:   "application/json",
 		},
 	}
 	if len(params) > 0 {
