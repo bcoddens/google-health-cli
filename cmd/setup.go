@@ -246,11 +246,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		}
 
 		destPath := config.ClientSecretPath()
-		destDir := filepath.Dir(destPath)
-		if err := os.MkdirAll(destDir, 0700); err != nil {
-			return client.NewConfigError(fmt.Sprintf("failed to create config directory: %v", err), "")
-		}
-		if err := os.WriteFile(destPath, srcData, 0600); err != nil {
+		if err := auth.WriteSecretFile(destPath, srcData); err != nil {
 			return client.NewConfigError(fmt.Sprintf("failed to copy client secret: %v", err), "")
 		}
 		success(fmt.Sprintf("Credentials saved to %s%s%s", dim, destPath, reset))
@@ -349,7 +345,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 		fmt.Fprintf(os.Stderr, "  %sOptions:%s\n", dim, reset)
 		fmt.Fprintf(os.Stderr, "    %sEnter%s     = All readonly scopes (recommended)\n", bold, reset)
-		fmt.Fprintf(os.Stderr, "    %s*%s         = All scopes (read + write)\n", bold, reset)
+		fmt.Fprintf(os.Stderr, "    %s*%s         = All data scopes (read + write; excludes cloud-platform)\n", bold, reset)
 		fmt.Fprintf(os.Stderr, "    %s1,2,5%s     = Specific scope numbers\n", bold, reset)
 		blank()
 
@@ -361,9 +357,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 				selectedScopes = append(selectedScopes, opt.scope.Suffix)
 			}
 		case "*", "all":
-			for _, s := range auth.AllScopes {
-				selectedScopes = append(selectedScopes, s.Suffix)
-			}
+			selectedScopes, _ = auth.ScopePreset("all")
 		default:
 			for _, part := range strings.Split(scopeInput, ",") {
 				part = strings.TrimSpace(part)

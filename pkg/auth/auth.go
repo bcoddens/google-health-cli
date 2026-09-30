@@ -197,8 +197,14 @@ func ScopePreset(name string) ([]string, error) {
 		}
 		return out, nil
 	case "all":
+		// cloud-platform is excluded: it is only for webhook management and
+		// data-plane endpoints reject tokens that carry it. Request it
+		// explicitly (--scopes cloud-platform / category "webhooks").
 		out := make([]string, 0, len(AllScopes))
 		for _, s := range AllScopes {
+			if s.Suffix == "cloud-platform" {
+				continue
+			}
 			out = append(out, s.Suffix)
 		}
 		return out, nil
@@ -337,18 +343,46 @@ func OAuthConfig(cs *ClientSecret, scopes []string, redirectURL string) *oauth2.
 
 // SaveCredentials persists tokens to the credentials file.
 func SaveCredentials(creds *StoredCredentials) error {
-	path := config.CredentialsPath()
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-
 	data, err := json.MarshalIndent(creds, "", "  ")
 	if err != nil {
 		return err
 	}
+	return WriteSecretFile(config.CredentialsPath(), data)
+}
 
-	return os.WriteFile(path, data, 0600)
+// WriteSecretFile atomically writes data to path with mode 0600, creating the
+// parent directory (0700) if needed. os.WriteFile only applies its mode when
+// it creates the file, so a pre-existing looser file would keep its mode;
+// writing a fresh 0600 temp file and renaming it over the target avoids that.
+func WriteSecretFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 // LoadCredentials reads stored tokens from the credentials file.
@@ -830,14 +864,11 @@ func PendingAuthPath() string {
 
 func SavePendingAuth(p *PendingAuth) error {
 	path := PendingAuthPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	return WriteSecretFile(path, data)
 }
 
 func LoadPendingAuth() (*PendingAuth, error) {
