@@ -31,6 +31,34 @@ import (
 // fails while preparing a schema command's response payload.
 const errFailedToEncodeOutput = "failed to encode output"
 
+// HTTP methods and operation-kind/field-name literals repeated across the
+// schema-type/scopes/endpoints output shapes (go:S1192).
+const (
+	httpMethodGet    = "GET"
+	httpMethodPost   = "POST"
+	httpMethodPatch  = "PATCH"
+	httpMethodDelete = "DELETE"
+
+	opList        = "list"
+	opCreate      = "create"
+	opUpdate      = "update"
+	opDelete      = "delete"
+	opRollup      = "rollup"
+	opDailyRollup = "daily-rollup"
+	opReconcile   = "reconcile"
+	opExportTCX   = "export-tcx"
+
+	schemaFieldScopes      = "scopes"
+	schemaFieldCategory    = "category"
+	schemaFieldDescription = "description"
+	schemaFieldCount       = "count"
+	schemaFieldDataTypes   = "dataTypes"
+	schemaFieldRange       = "range"
+	schemaFieldMethod      = "method"
+	schemaFieldPath        = "path"
+	schemaFieldDataType    = "dataType"
+)
+
 var schemaCmd = &cobra.Command{
 	Use:   "schema",
 	Short: "Explore API schema, data types, scopes, and endpoints",
@@ -50,7 +78,7 @@ var schemaTypeCmd = &cobra.Command{
 }
 
 var schemaScopesCmd = &cobra.Command{
-	Use:   "scopes",
+	Use:   schemaFieldScopes,
 	Short: "List all OAuth scopes with associated data types",
 	RunE:  runSchemaScopes,
 }
@@ -83,19 +111,19 @@ func runSchemaTypes(cmd *cobra.Command, args []string) error {
 	for _, id := range ids {
 		dt := types.Get(id)
 		typeList = append(typeList, map[string]interface{}{
-			"id":          dt.ID,
-			"category":    dt.Category,
-			"description": dt.Description,
-			"writable":    dt.Writable,
-			"rollupOnly":  dt.RollupOnly,
-			"operations":  dt.Operations,
+			"id":                   dt.ID,
+			schemaFieldCategory:    dt.Category,
+			schemaFieldDescription: dt.Description,
+			"writable":             dt.Writable,
+			"rollupOnly":           dt.RollupOnly,
+			"operations":           dt.Operations,
 		})
 	}
 
 	result := map[string]interface{}{
-		"source":    source,
-		"count":     len(typeList),
-		"dataTypes": typeList,
+		"source":             source,
+		schemaFieldCount:     len(typeList),
+		schemaFieldDataTypes: typeList,
 	}
 
 	data, err := json.MarshalIndent(result, "", "  ")
@@ -129,16 +157,16 @@ func runSchemaType(cmd *cobra.Command, args []string) error {
 	fields := extractFieldsFromDiscovery(discoveryDoc, name)
 
 	result := map[string]interface{}{
-		"source":      source,
-		"id":          dt.ID,
-		"filterName":  dt.FilterName,
-		"category":    dt.Category,
-		"scope":       dt.FullScope(),
-		"description": dt.Description,
-		"operations":  dt.Operations,
-		"writable":    dt.Writable,
-		"rollupOnly":  dt.RollupOnly,
-		"parameters":  buildOperationParameters(dt),
+		"source":               source,
+		"id":                   dt.ID,
+		"filterName":           dt.FilterName,
+		schemaFieldCategory:    dt.Category,
+		"scope":                dt.FullScope(),
+		schemaFieldDescription: dt.Description,
+		"operations":           dt.Operations,
+		"writable":             dt.Writable,
+		"rollupOnly":           dt.RollupOnly,
+		"parameters":           buildOperationParameters(dt),
 	}
 	if len(fields) > 0 {
 		result["fields"] = fields
@@ -165,7 +193,7 @@ func buildOperationParameters(dt *types.DataType) map[string]interface{} {
 	params := map[string]interface{}{}
 	for _, op := range dt.Operations {
 		switch op {
-		case "list":
+		case opList:
 			p := map[string]interface{}{
 				"pageSize":  pageSizeDesc,
 				"pageToken": pageTokenDesc,
@@ -174,10 +202,10 @@ func buildOperationParameters(dt *types.DataType) map[string]interface{} {
 				p["filter"] = tmpl
 			}
 			params[op] = p
-		case "rollup":
+		case opRollup:
 			params[op] = map[string]interface{}{
 				"body": map[string]interface{}{
-					"range": map[string]string{
+					schemaFieldRange: map[string]string{
 						"startTime": "<RFC3339>",
 						"endTime":   "<RFC3339, exclusive>",
 					},
@@ -187,10 +215,10 @@ func buildOperationParameters(dt *types.DataType) map[string]interface{} {
 					"dataSourceFamily": dataSourceFamilyDesc,
 				},
 			}
-		case "daily-rollup":
+		case opDailyRollup:
 			params[op] = map[string]interface{}{
 				"body": map[string]interface{}{
-					"range": map[string]string{
+					schemaFieldRange: map[string]string{
 						"start": "civil date {year, month, day}",
 						"end":   "civil date {year, month, day}, exclusive",
 					},
@@ -239,17 +267,17 @@ func runSchemaScopes(cmd *cobra.Command, args []string) error {
 		sort.Strings(associatedTypes)
 
 		scopeList = append(scopeList, map[string]interface{}{
-			"scope":     auth.FullScope(s.Suffix),
-			"suffix":    s.Suffix,
-			"label":     s.Label,
-			"category":  s.Category,
-			"dataTypes": associatedTypes,
+			"scope":              auth.FullScope(s.Suffix),
+			"suffix":             s.Suffix,
+			"label":              s.Label,
+			schemaFieldCategory:  s.Category,
+			schemaFieldDataTypes: associatedTypes,
 		})
 	}
 
 	result := map[string]interface{}{
-		"count":  len(scopeList),
-		"scopes": scopeList,
+		schemaFieldCount:  len(scopeList),
+		schemaFieldScopes: scopeList,
 	}
 
 	data, err := json.MarshalIndent(result, "", "  ")
@@ -265,25 +293,25 @@ func runSchemaEndpoints(cmd *cobra.Command, args []string) error {
 
 	// User endpoints (static).
 	endpoints = append(endpoints,
-		map[string]interface{}{"method": "GET", "path": "/v4/users/me/identity", "description": "Get user identity"},
-		map[string]interface{}{"method": "GET", "path": "/v4/users/me/profile", "description": "Get user profile"},
-		map[string]interface{}{"method": "PATCH", "path": "/v4/users/me/profile", "description": "Update user profile"},
-		map[string]interface{}{"method": "GET", "path": "/v4/users/me/settings", "description": "Get user settings"},
-		map[string]interface{}{"method": "PATCH", "path": "/v4/users/me/settings", "description": "Update user settings"},
+		map[string]interface{}{schemaFieldMethod: httpMethodGet, schemaFieldPath: "/v4/users/me/identity", schemaFieldDescription: "Get user identity"},
+		map[string]interface{}{schemaFieldMethod: httpMethodGet, schemaFieldPath: "/v4/users/me/profile", schemaFieldDescription: "Get user profile"},
+		map[string]interface{}{schemaFieldMethod: httpMethodPatch, schemaFieldPath: "/v4/users/me/profile", schemaFieldDescription: "Update user profile"},
+		map[string]interface{}{schemaFieldMethod: httpMethodGet, schemaFieldPath: "/v4/users/me/settings", schemaFieldDescription: "Get user settings"},
+		map[string]interface{}{schemaFieldMethod: httpMethodPatch, schemaFieldPath: "/v4/users/me/settings", schemaFieldDescription: "Update user settings"},
 	)
 
 	// Webhook endpoints — project-level subscriber/subscription model
 	// (discovery revision 20260528). These require the cloud-platform scope
 	// and a configured project ID; see 'ghealth webhooks --help'.
 	endpoints = append(endpoints,
-		map[string]interface{}{"method": "GET", "path": "/v4/projects/{project}/subscribers", "description": "List webhook subscribers"},
-		map[string]interface{}{"method": "POST", "path": "/v4/projects/{project}/subscribers", "description": "Create webhook subscriber"},
-		map[string]interface{}{"method": "PATCH", "path": "/v4/projects/{project}/subscribers/{subscriber}", "description": "Update webhook subscriber"},
-		map[string]interface{}{"method": "DELETE", "path": "/v4/projects/{project}/subscribers/{subscriber}", "description": "Delete webhook subscriber"},
-		map[string]interface{}{"method": "GET", "path": "/v4/projects/{project}/subscribers/{subscriber}/subscriptions", "description": "List webhook subscriptions"},
-		map[string]interface{}{"method": "POST", "path": "/v4/projects/{project}/subscribers/{subscriber}/subscriptions", "description": "Create webhook subscription"},
-		map[string]interface{}{"method": "PATCH", "path": "/v4/projects/{project}/subscribers/{subscriber}/subscriptions/{subscription}", "description": "Update webhook subscription"},
-		map[string]interface{}{"method": "DELETE", "path": "/v4/projects/{project}/subscribers/{subscriber}/subscriptions/{subscription}", "description": "Delete webhook subscription"},
+		map[string]interface{}{schemaFieldMethod: httpMethodGet, schemaFieldPath: "/v4/projects/{project}/subscribers", schemaFieldDescription: "List webhook subscribers"},
+		map[string]interface{}{schemaFieldMethod: httpMethodPost, schemaFieldPath: "/v4/projects/{project}/subscribers", schemaFieldDescription: "Create webhook subscriber"},
+		map[string]interface{}{schemaFieldMethod: httpMethodPatch, schemaFieldPath: "/v4/projects/{project}/subscribers/{subscriber}", schemaFieldDescription: "Update webhook subscriber"},
+		map[string]interface{}{schemaFieldMethod: httpMethodDelete, schemaFieldPath: "/v4/projects/{project}/subscribers/{subscriber}", schemaFieldDescription: "Delete webhook subscriber"},
+		map[string]interface{}{schemaFieldMethod: httpMethodGet, schemaFieldPath: "/v4/projects/{project}/subscribers/{subscriber}/subscriptions", schemaFieldDescription: "List webhook subscriptions"},
+		map[string]interface{}{schemaFieldMethod: httpMethodPost, schemaFieldPath: "/v4/projects/{project}/subscribers/{subscriber}/subscriptions", schemaFieldDescription: "Create webhook subscription"},
+		map[string]interface{}{schemaFieldMethod: httpMethodPatch, schemaFieldPath: "/v4/projects/{project}/subscribers/{subscriber}/subscriptions/{subscription}", schemaFieldDescription: "Update webhook subscription"},
+		map[string]interface{}{schemaFieldMethod: httpMethodDelete, schemaFieldPath: "/v4/projects/{project}/subscribers/{subscriber}/subscriptions/{subscription}", schemaFieldDescription: "Delete webhook subscription"},
 	)
 
 	// Data type endpoints (derived from registry).
@@ -295,37 +323,37 @@ func runSchemaEndpoints(cmd *cobra.Command, args []string) error {
 		for _, op := range dt.Operations {
 			var method, path, desc string
 			switch op {
-			case "list":
-				method, path, desc = "GET", basePath, fmt.Sprintf("List %s data points", id)
-			case "create":
-				method, path, desc = "POST", basePath, fmt.Sprintf("Create %s data point", id)
-			case "update":
-				method, path, desc = "PATCH", basePath+"/{id}", fmt.Sprintf("Update %s data point", id)
-			case "delete":
-				method, path, desc = "POST", basePath+":batchDelete", fmt.Sprintf("Delete %s data points", id)
-			case "rollup":
-				method, path, desc = "POST", basePath+":rollUp", fmt.Sprintf("Roll up %s data", id)
-			case "daily-rollup":
-				method, path, desc = "POST", basePath+":dailyRollUp", fmt.Sprintf("Daily roll up %s data", id)
-			case "reconcile":
-				method, path, desc = "GET", basePath+":reconcile", fmt.Sprintf("Reconcile %s data", id)
-			case "export-tcx":
-				method, path, desc = "GET", basePath+"/{id}:exportExerciseTcx", fmt.Sprintf("Export %s as TCX", id)
+			case opList:
+				method, path, desc = httpMethodGet, basePath, fmt.Sprintf("List %s data points", id)
+			case opCreate:
+				method, path, desc = httpMethodPost, basePath, fmt.Sprintf("Create %s data point", id)
+			case opUpdate:
+				method, path, desc = httpMethodPatch, basePath+"/{id}", fmt.Sprintf("Update %s data point", id)
+			case opDelete:
+				method, path, desc = httpMethodPost, basePath+":batchDelete", fmt.Sprintf("Delete %s data points", id)
+			case opRollup:
+				method, path, desc = httpMethodPost, basePath+":rollUp", fmt.Sprintf("Roll up %s data", id)
+			case opDailyRollup:
+				method, path, desc = httpMethodPost, basePath+":dailyRollUp", fmt.Sprintf("Daily roll up %s data", id)
+			case opReconcile:
+				method, path, desc = httpMethodGet, basePath+":reconcile", fmt.Sprintf("Reconcile %s data", id)
+			case opExportTCX:
+				method, path, desc = httpMethodGet, basePath+"/{id}:exportExerciseTcx", fmt.Sprintf("Export %s as TCX", id)
 			default:
 				continue
 			}
 			endpoints = append(endpoints, map[string]interface{}{
-				"method":      method,
-				"path":        path,
-				"description": desc,
-				"dataType":    id,
+				schemaFieldMethod:      method,
+				schemaFieldPath:        path,
+				schemaFieldDescription: desc,
+				schemaFieldDataType:    id,
 			})
 		}
 	}
 
 	result := map[string]interface{}{
-		"count":     len(endpoints),
-		"endpoints": endpoints,
+		schemaFieldCount: len(endpoints),
+		"endpoints":      endpoints,
 	}
 
 	data, err := json.MarshalIndent(result, "", "  ")
@@ -438,7 +466,7 @@ func applySchemaFieldMetadata(f map[string]interface{}, prop schemaProperty) {
 		f["format"] = prop.Format
 	}
 	if prop.Description != "" {
-		f["description"] = prop.Description
+		f[schemaFieldDescription] = prop.Description
 		// Extract required/optional from description prefix.
 		if strings.HasPrefix(prop.Description, "Required.") {
 			f["required"] = true
