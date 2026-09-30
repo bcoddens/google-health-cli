@@ -28,6 +28,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	// webhookContentTypeJSON is the Content-Type header for all webhook
+	// subscriber/subscription request bodies.
+	webhookContentTypeJSON = "application/json"
+	// webhookSubscribersSegment is the "/subscribers/{id}" path segment
+	// shared by every subscriber/subscription request path.
+	webhookSubscribersSegment = "/subscribers/"
+	// flagDescParentSubscriberID is the shared help text for the
+	// "--subscriber" flag across the subscription commands.
+	flagDescParentSubscriberID = "Parent subscriber ID (required)"
+)
+
 // Webhooks are delivered through the project-level subscribers/subscriptions
 // resource model (discovery revision 20260528). A *subscriber* is an HTTPS
 // endpoint (with an auth secret and per-data-type config); a *subscription*
@@ -181,18 +193,18 @@ func init() {
 	// subscriptions
 	webhooksCmd.AddCommand(webhooksSubscriptionsCmd)
 	webhooksSubscriptionsCmd.AddCommand(webhooksSubscriptionsListCmd)
-	webhooksSubscriptionsListCmd.Flags().StringVar(&flagWhSubscriberID, "subscriber", "", "Parent subscriber ID (required)")
+	webhooksSubscriptionsListCmd.Flags().StringVar(&flagWhSubscriberID, "subscriber", "", flagDescParentSubscriberID)
 	webhooksSubscriptionsListCmd.MarkFlagRequired("subscriber")
 
 	webhooksSubscriptionsCmd.AddCommand(webhooksSubscriptionsCreateCmd)
-	webhooksSubscriptionsCreateCmd.Flags().StringVar(&flagWhSubscriberID, "subscriber", "", "Parent subscriber ID (required)")
+	webhooksSubscriptionsCreateCmd.Flags().StringVar(&flagWhSubscriberID, "subscriber", "", flagDescParentSubscriberID)
 	webhooksSubscriptionsCreateCmd.Flags().StringVar(&flagWhTypes, "types", "", "Comma-separated data type IDs to subscribe to")
 	webhooksSubscriptionsCreateCmd.Flags().StringVar(&flagWhUser, "user", "users/me", "User resource name the subscription is active for")
 	webhooksSubscriptionsCreateCmd.Flags().StringVar(&flagWhSubscriptionID, "id", "", "Optional subscription ID (4-36 chars)")
 	webhooksSubscriptionsCreateCmd.MarkFlagRequired("subscriber")
 
 	webhooksSubscriptionsCmd.AddCommand(webhooksSubscriptionsUpdateCmd)
-	webhooksSubscriptionsUpdateCmd.Flags().StringVar(&flagWhSubscriberID, "subscriber", "", "Parent subscriber ID (required)")
+	webhooksSubscriptionsUpdateCmd.Flags().StringVar(&flagWhSubscriberID, "subscriber", "", flagDescParentSubscriberID)
 	webhooksSubscriptionsUpdateCmd.Flags().StringVar(&flagWhSubscriptionID, "id", "", "Subscription ID (required)")
 	webhooksSubscriptionsUpdateCmd.Flags().StringVar(&flagWhJSON, "json", "", "JSON body for the Subscription (required)")
 	webhooksSubscriptionsUpdateCmd.Flags().StringVar(&flagWhUpdateMask, "update-mask", "", "Comma-separated fields to update")
@@ -201,7 +213,7 @@ func init() {
 	webhooksSubscriptionsUpdateCmd.MarkFlagRequired("json")
 
 	webhooksSubscriptionsCmd.AddCommand(webhooksSubscriptionsDeleteCmd)
-	webhooksSubscriptionsDeleteCmd.Flags().StringVar(&flagWhSubscriberID, "subscriber", "", "Parent subscriber ID (required)")
+	webhooksSubscriptionsDeleteCmd.Flags().StringVar(&flagWhSubscriberID, "subscriber", "", flagDescParentSubscriberID)
 	webhooksSubscriptionsDeleteCmd.Flags().StringVar(&flagWhSubscriptionID, "id", "", "Subscription ID (required)")
 	webhooksSubscriptionsDeleteCmd.MarkFlagRequired("subscriber")
 	webhooksSubscriptionsDeleteCmd.MarkFlagRequired("id")
@@ -303,7 +315,7 @@ func runSubscribersCreate(cmd *cobra.Command, args []string) error {
 		Method:      "POST",
 		Path:        "/" + parent + "/subscribers",
 		Body:        bodyJSON,
-		ContentType: "application/json",
+		ContentType: webhookContentTypeJSON,
 	}
 	if flagWhSubscriberID != "" {
 		req.Query = url.Values{"subscriberId": {flagWhSubscriberID}}
@@ -321,9 +333,9 @@ func runSubscribersUpdate(cmd *cobra.Command, args []string) error {
 	}
 	req := &client.Request{
 		Method:      "PATCH",
-		Path:        "/" + parent + "/subscribers/" + flagWhSubscriberID,
+		Path:        "/" + parent + webhookSubscribersSegment + flagWhSubscriberID,
 		Body:        []byte(flagWhJSON),
-		ContentType: "application/json",
+		ContentType: webhookContentTypeJSON,
 	}
 	if flagWhUpdateMask != "" {
 		req.Query = url.Values{"updateMask": {flagWhUpdateMask}}
@@ -338,7 +350,7 @@ func runSubscribersDelete(cmd *cobra.Command, args []string) error {
 	}
 	req := &client.Request{
 		Method: "DELETE",
-		Path:   "/" + parent + "/subscribers/" + flagWhSubscriberID,
+		Path:   "/" + parent + webhookSubscribersSegment + flagWhSubscriberID,
 	}
 	if flagWhForce {
 		req.Query = url.Values{"force": {"true"}}
@@ -353,7 +365,7 @@ func runSubscriptionsList(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	path := "/" + parent + "/subscribers/" + flagWhSubscriberID + "/subscriptions"
+	path := "/" + parent + webhookSubscribersSegment + flagWhSubscriberID + "/subscriptions"
 	return runWebhookReq(&client.Request{Method: "GET", Path: path})
 }
 
@@ -371,9 +383,9 @@ func runSubscriptionsCreate(cmd *cobra.Command, args []string) error {
 	bodyJSON, _ := json.Marshal(body)
 	req := &client.Request{
 		Method:      "POST",
-		Path:        "/" + parent + "/subscribers/" + flagWhSubscriberID + "/subscriptions",
+		Path:        "/" + parent + webhookSubscribersSegment + flagWhSubscriberID + "/subscriptions",
 		Body:        bodyJSON,
-		ContentType: "application/json",
+		ContentType: webhookContentTypeJSON,
 	}
 	if flagWhSubscriptionID != "" {
 		req.Query = url.Values{"subscriptionId": {flagWhSubscriptionID}}
@@ -391,9 +403,9 @@ func runSubscriptionsUpdate(cmd *cobra.Command, args []string) error {
 	}
 	req := &client.Request{
 		Method:      "PATCH",
-		Path:        "/" + parent + "/subscribers/" + flagWhSubscriberID + "/subscriptions/" + flagWhSubscriptionID,
+		Path:        "/" + parent + webhookSubscribersSegment + flagWhSubscriberID + "/subscriptions/" + flagWhSubscriptionID,
 		Body:        []byte(flagWhJSON),
-		ContentType: "application/json",
+		ContentType: webhookContentTypeJSON,
 	}
 	if flagWhUpdateMask != "" {
 		req.Query = url.Values{"updateMask": {flagWhUpdateMask}}
@@ -406,7 +418,7 @@ func runSubscriptionsDelete(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	path := "/" + parent + "/subscribers/" + flagWhSubscriberID + "/subscriptions/" + flagWhSubscriptionID
+	path := "/" + parent + webhookSubscribersSegment + flagWhSubscriberID + "/subscriptions/" + flagWhSubscriptionID
 	return runWebhookReq(&client.Request{Method: "DELETE", Path: path})
 }
 
