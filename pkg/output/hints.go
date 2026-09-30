@@ -21,6 +21,10 @@ import (
 	"time"
 )
 
+// operationList is the "list" operation name compared against ctx.operation
+// by several hint generators.
+const operationList = "list"
+
 // hintContext bundles the parsed request/response state that each hint
 // generator needs, so GenerateHints can dispatch through a uniform slice
 // of generator functions instead of one large branching body.
@@ -109,7 +113,7 @@ func wrongResolutionHint(ctx hintContext) string {
 // sleepDetailHint (Hint 2) suggests --detail for a sleep list that did not
 // request it.
 func sleepDetailHint(ctx hintContext) string {
-	if ctx.operation != "list" || len(ctx.dataPoints) == 0 {
+	if ctx.operation != operationList || len(ctx.dataPoints) == 0 {
 		return ""
 	}
 	if ctx.dataType == "sleep" && !ctx.detail {
@@ -121,7 +125,7 @@ func sleepDetailHint(ctx hintContext) string {
 // exerciseCorrelationHint (Hint 3a) suggests a correlated heart-rate query
 // using the first exercise session's time window.
 func exerciseCorrelationHint(ctx hintContext) string {
-	if ctx.operation != "list" || ctx.dataType != "exercise" || len(ctx.dataPoints) == 0 {
+	if ctx.operation != operationList || ctx.dataType != "exercise" || len(ctx.dataPoints) == 0 {
 		return ""
 	}
 	var dp map[string]interface{}
@@ -142,7 +146,7 @@ func exerciseCorrelationHint(ctx hintContext) string {
 // sleepVitalsHint (Hint 3b) suggests correlated overnight-vitals queries
 // using the first sleep session's start date.
 func sleepVitalsHint(ctx hintContext) string {
-	if ctx.operation != "list" || ctx.dataType != "sleep" || len(ctx.dataPoints) == 0 {
+	if ctx.operation != operationList || ctx.dataType != "sleep" || len(ctx.dataPoints) == 0 {
 		return ""
 	}
 	var dp map[string]interface{}
