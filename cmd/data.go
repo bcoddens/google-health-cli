@@ -750,7 +750,7 @@ func newGetCommand(dt *types.DataType) *cobra.Command {
 Use 'ghealth data %s list --limit 5' to find data point IDs.`, dt.ID, dt.ID),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if id == "" {
-				return client.NewValidationError("--id is required",
+				return client.NewValidationError(idRequiredMsg,
 					fmt.Sprintf("Use 'ghealth data %s list --limit 5' to find data point IDs", dt.ID))
 			}
 			req := &client.Request{
@@ -766,7 +766,7 @@ Use 'ghealth data %s list --limit 5' to find data point IDs.`, dt.ID, dt.ID),
 			})
 		},
 	}
-	cmd.Flags().StringVar(&id, "id", "", "Data point ID (required)")
+	cmd.Flags().StringVar(&id, "id", "", idFlagUsage)
 	return cmd
 }
 
@@ -822,7 +822,7 @@ Use --update-mask to specify which fields to update (comma-separated).
 The API returns an Operation object (write operations are asynchronous).`, dt.ID, dt.ID),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if id == "" {
-				return client.NewValidationError("--id is required",
+				return client.NewValidationError(idRequiredMsg,
 					fmt.Sprintf("Use 'ghealth data %s list --limit 5' to find data point IDs", dt.ID))
 			}
 			if jsonBody == "" {
@@ -842,7 +842,7 @@ The API returns an Operation object (write operations are asynchronous).`, dt.ID
 			return doRequest(req)
 		},
 	}
-	cmd.Flags().StringVar(&id, "id", "", "Data point ID (required)")
+	cmd.Flags().StringVar(&id, "id", "", idFlagUsage)
 	cmd.Flags().StringVar(&jsonBody, "json", "", "Fields to update as JSON (required)")
 	cmd.Flags().StringVar(&updateMask, "update-mask", "", "Comma-separated field paths to update")
 	return cmd
