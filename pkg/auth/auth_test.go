@@ -19,6 +19,8 @@ func TestScopePreset(t *testing.T) {
 		{name: "multiple categories keep order", in: "sleep, nutrition", want: []string{"sleep.readonly", "nutrition.readonly"}},
 		{name: "readonly-only category", in: "ecg", want: []string{"ecg.readonly"}},
 		{name: "webhooks has no readonly variant", in: "webhooks", want: []string{"cloud-platform"}},
+		{name: "cloud-platform mixed with data scope", in: "sleep,webhooks", wantErr: true},
+		{name: "cloud-platform listed first, still mixed", in: "webhooks,sleep", wantErr: true},
 		{name: "unknown category", in: "bogus", wantErr: true},
 		{name: "empty", in: "", wantErr: true},
 		{name: "only separators", in: " , ,", wantErr: true},

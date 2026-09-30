@@ -28,6 +28,27 @@ go vet ./...
 
 Verify against the live API: `ghealth auth status`, then `ghealth data steps daily-rollup --from 2026-03-22 --to 2026-03-29`.
 
+## Quality gates
+
+`make check` runs everything CI enforces (needs `golangci-lint` v2, `govulncheck`, `shellcheck`; `gitleaks` for `make secrets`):
+
+| Target | What it checks |
+|--------|----------------|
+| `make fmt-check` / `make fmt` | gofmt cleanliness / rewrite |
+| `make vet`, `make lint` | `go vet`, golangci-lint (`.golangci.yml`; gosec exclusions are scoped and commented) |
+| `make test` | unit tests with `-race` |
+| `make cover` | tests + total-coverage gate (`COVERAGE_MIN`, currently 45%; measured 46.3% when introduced — raise it as tests are added) |
+| `make vuln` | `govulncheck ./...` |
+| `make shellcheck` | `scripts/*.sh` |
+| `make secrets` | gitleaks full-history scan |
+
+External reviewers (both optional locally, both keep secrets out of the repo):
+
+- **SonarQube**: `cp .env.example .env`, set `SONAR_TOKEN`, then `make sonar` (`scripts/sonar-scan.sh --fresh-coverage`; exit code mirrors the quality gate). Needs the local SonarQube container. Sonar reports *line* coverage, which differs from the Go statement coverage used by `make cover`.
+- **CodeRabbit**: `make coderabbit` (`scripts/coderabbit-review.sh --base main`) runs the local CLI; the GitHub app reads `.coderabbit.yaml` on PRs.
+
+Use `client.AsCLIError(err)` instead of `err.(*client.CLIError)`, and write token/secret files with `auth.WriteSecretFile` (mode 0600, atomic) — never a bare `os.WriteFile`.
+
 ## Workflow
 
 - Feature branches + PRs — never commit to main directly

@@ -240,6 +240,16 @@ func ScopePreset(name string) ([]string, error) {
 	if len(out) == 0 {
 		return nil, fmt.Errorf("scope preset %q resolved to no scopes", name)
 	}
+	// A token carrying cloud-platform is rejected by the data-plane endpoints,
+	// so combining it with any other scope yields a token that is useless for
+	// both. Webhook management needs its own login (see 'ghealth webhooks --help').
+	if len(out) > 1 {
+		for _, s := range out {
+			if s == "cloud-platform" {
+				return nil, fmt.Errorf("scope preset %q mixes cloud-platform with data scopes; request 'webhooks' on its own and use a separate GHEALTH_CONFIG_DIR", name)
+			}
+		}
+	}
 	return out, nil
 }
 
