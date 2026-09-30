@@ -61,8 +61,22 @@ func TestMiscCharProjectPath_NoProjectID(t *testing.T) {
 // miscCharWebhookDryRunURL runs fn under --dry-run and returns the "url"
 // field from the resulting DryRun JSON, pinning the exact request path
 // built by the handler (including the "/subscribers/" path segments).
+//
+// runWebhookReq always constructs a real client (even in --dry-run mode),
+// which walks the Application-Default-Credentials chain. Left untouched,
+// that chain falls through to a GCE metadata probe whose background
+// goroutine races with later tests under -race; pointing
+// GOOGLE_APPLICATION_CREDENTIALS at a fake-but-well-formed credentials
+// file makes ADC resolution succeed locally with no metadata lookup.
 func miscCharWebhookDryRunURL(t *testing.T, fn func() error) map[string]interface{} {
 	t.Helper()
+	credPath := t.TempDir() + "/adc.json"
+	adcJSON := `{"type":"authorized_user","client_id":"x","client_secret":"y","refresh_token":"z"}`
+	if err := os.WriteFile(credPath, []byte(adcJSON), 0o600); err != nil {
+		t.Fatalf("write fake ADC file: %v", err)
+	}
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", credPath)
+
 	flagDryRun = true
 	defer func() { flagDryRun = false }()
 
