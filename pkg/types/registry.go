@@ -42,6 +42,30 @@ const (
 	TimeFieldPhysicalIntervalStart = "physical_interval_start"
 )
 
+// Operation names supported by DataType.Operations. These are user-visible
+// in `schema types` output and used to route CLI subcommands, so their
+// string values must not change.
+const (
+	OpList        = "list"
+	OpGet         = "get"
+	OpCreate      = "create"
+	OpUpdate      = "update"
+	OpDelete      = "delete"
+	OpRollup      = "rollup"
+	OpDailyRollup = "daily-rollup"
+	OpReconcile   = "reconcile"
+	OpExportTCX   = "export-tcx"
+)
+
+// Category values used for OAuth scope construction (Category + ".readonly")
+// and for grouping in `schema types` output.
+const (
+	CategoryActivityAndFitness           = "activity_and_fitness"
+	CategoryHealthMetricsAndMeasurements = "health_metrics_and_measurements"
+	CategorySleep                        = "sleep"
+	CategoryNutrition                    = "nutrition"
+)
+
 // DataType holds metadata about a Health API data type.
 type DataType struct {
 	ID          string   `json:"id"`          // kebab-case identifier used in CLI and API URLs
@@ -132,6 +156,19 @@ func (d *DataType) FilterPath() string {
 	}
 }
 
+// filterOpGE and filterOpLT are the comparison operators FilterFrom/FilterTo
+// embed in a filter expression's `path op "value"` clause.
+const (
+	filterOpGE = " >= "
+	filterOpLT = " < "
+)
+
+// filterExpr renders a filter clause: path, comparison operator, and a
+// quoted value.
+func filterExpr(path, op, value string) string {
+	return path + op + "\"" + value + "\""
+}
+
 // FilterFrom returns the filter expression for a --from date constraint.
 func (d *DataType) FilterFrom(date string) string {
 	path := d.FilterPath()
@@ -139,15 +176,15 @@ func (d *DataType) FilterFrom(date string) string {
 		return ""
 	}
 	if d.FilterField != "" {
-		return path + " >= \"" + date + "\""
+		return filterExpr(path, filterOpGE, date)
 	}
 	switch d.TimeField {
 	case TimeFieldSample, TimeFieldPhysicalIntervalStart:
-		return path + " >= \"" + ensureUTC(date) + "\""
+		return filterExpr(path, filterOpGE, ensureUTC(date))
 	case TimeFieldDaily:
-		return path + " >= \"" + dateOnly(date) + "\""
+		return filterExpr(path, filterOpGE, dateOnly(date))
 	default:
-		return path + " >= \"" + date + "\""
+		return filterExpr(path, filterOpGE, date)
 	}
 }
 
@@ -159,18 +196,18 @@ func (d *DataType) FilterTo(date string) string {
 		return ""
 	}
 	if d.FilterField != "" {
-		return path + " < \"" + date + "\""
+		return filterExpr(path, filterOpLT, date)
 	}
 	switch d.TimeField {
 	case TimeFieldSample:
-		return path + " < \"" + ensureUTC(date) + "\""
+		return filterExpr(path, filterOpLT, ensureUTC(date))
 	case TimeFieldDaily:
-		return path + " < \"" + dateOnly(date) + "\""
+		return filterExpr(path, filterOpLT, dateOnly(date))
 	case TimeFieldPhysicalIntervalStart:
 		// The API rejects an end-time bound for these types, so emit none.
 		return ""
 	default:
-		return path + " < \"" + date + "\""
+		return filterExpr(path, filterOpLT, date)
 	}
 }
 
@@ -241,88 +278,88 @@ func init() {
 
 	register(&DataType{
 		ID: "steps", FilterName: "steps", TimeField: interval,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "Step count data (use daily-rollup for totals)",
-		Operations:  []string{"list", "rollup", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpRollup, OpDailyRollup, OpReconcile},
 	})
 	register(&DataType{
 		ID: "heart-rate", FilterName: "heart_rate", TimeField: sample,
-		Category:         "activity_and_fitness",
+		Category:         CategoryActivityAndFitness,
 		Description:      "Heart rate in beats per minute",
-		Operations:       []string{"list", "rollup", "daily-rollup", "reconcile"},
+		Operations:       []string{OpList, OpRollup, OpDailyRollup, OpReconcile},
 		ShortRollupRange: true,
 	})
 	register(&DataType{
 		ID: "exercise", FilterName: "exercise", TimeField: interval,
-		Category:     "activity_and_fitness",
+		Category:     CategoryActivityAndFitness,
 		Description:  "Exercise and workout sessions",
-		Operations:   []string{"list", "get", "create", "update", "delete", "reconcile", "export-tcx"},
+		Operations:   []string{OpList, OpGet, OpCreate, OpUpdate, OpDelete, OpReconcile, OpExportTCX},
 		Writable:     true,
 		SmallPageCap: true, // API caps exercise list at 25 rows/page
 	})
 	register(&DataType{
 		ID: "distance", FilterName: "distance", TimeField: interval,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "Distance traveled (use daily-rollup for totals in mm)",
-		Operations:  []string{"list", "rollup", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpRollup, OpDailyRollup, OpReconcile},
 	})
 	register(&DataType{
 		ID: "active-zone-minutes", FilterName: "active_zone_minutes", TimeField: interval,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "Active zone minutes with heart rate zone breakdown",
-		Operations:  []string{"list", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpDailyRollup, OpReconcile},
 	})
 	register(&DataType{
 		ID: "altitude", FilterName: "altitude", TimeField: interval,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "Altitude data",
-		Operations:  []string{"list", "rollup", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpRollup, OpDailyRollup, OpReconcile},
 	})
 	register(&DataType{
 		ID: "basal-energy-burned", FilterName: "basal_energy_burned", TimeField: interval,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "Basal energy burned from BMR (kcal per interval)",
-		Operations:  []string{"list", "reconcile"},
+		Operations:  []string{OpList, OpReconcile},
 	})
 	register(&DataType{
 		ID: "active-energy-burned", FilterName: "active_energy_burned", TimeField: interval,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "Active energy burned from activity (kcal per interval)",
-		Operations:  []string{"list", "rollup", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpRollup, OpDailyRollup, OpReconcile},
 	})
 	register(&DataType{
 		ID: "vo2-max", FilterName: "vo2_max", TimeField: sample,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "VO2 max estimation",
-		Operations:  []string{"list", "reconcile"},
+		Operations:  []string{OpList, OpReconcile},
 	})
 	register(&DataType{
 		ID: "heart-rate-variability", FilterName: "heart_rate_variability", TimeField: sample,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "Heart rate variability (HRV)",
-		Operations:  []string{"list", "reconcile"},
+		Operations:  []string{OpList, OpReconcile},
 	})
 	register(&DataType{
 		ID: "activity-level", FilterName: "activity_level", TimeField: interval,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "Activity level breakdown (sedentary, light, moderate, vigorous)",
-		Operations:  []string{"list", "reconcile"},
+		Operations:  []string{OpList, OpReconcile},
 	})
 
 	// --- Rollup-only activity types ---
 
 	register(&DataType{
 		ID: "floors", FilterName: "floors", TimeField: interval,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "Floors climbed",
-		Operations:  []string{"rollup", "daily-rollup", "reconcile"},
+		Operations:  []string{OpRollup, OpDailyRollup, OpReconcile},
 		RollupOnly:  true,
 	})
 	register(&DataType{
 		ID: "active-minutes", FilterName: "active_minutes", TimeField: interval,
-		Category:         "activity_and_fitness",
+		Category:         CategoryActivityAndFitness,
 		Description:      "Active minutes",
-		Operations:       []string{"rollup", "daily-rollup", "reconcile"},
+		Operations:       []string{OpRollup, OpDailyRollup, OpReconcile},
 		RollupOnly:       true,
 		ShortRollupRange: true,
 	})
@@ -331,51 +368,51 @@ func init() {
 
 	register(&DataType{
 		ID: "weight", FilterName: "weight", TimeField: sample,
-		Category:    "health_metrics_and_measurements",
+		Category:    CategoryHealthMetricsAndMeasurements,
 		Description: "Body weight (weightGrams)",
-		Operations:  []string{"list", "get", "create", "update", "delete", "rollup", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpGet, OpCreate, OpUpdate, OpDelete, OpRollup, OpDailyRollup, OpReconcile},
 		Writable:    true,
 	})
 	register(&DataType{
 		ID: "body-fat", FilterName: "body_fat", TimeField: sample,
-		Category:    "health_metrics_and_measurements",
+		Category:    CategoryHealthMetricsAndMeasurements,
 		Description: "Body fat percentage",
-		Operations:  []string{"list", "get", "create", "update", "delete", "rollup", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpGet, OpCreate, OpUpdate, OpDelete, OpRollup, OpDailyRollup, OpReconcile},
 		Writable:    true,
 	})
 	register(&DataType{
 		ID: "height", FilterName: "height", TimeField: sample,
-		Category:    "health_metrics_and_measurements",
+		Category:    CategoryHealthMetricsAndMeasurements,
 		Description: "Body height (heightMillimeters)",
-		Operations:  []string{"list", "get", "create", "update", "delete", "reconcile"},
+		Operations:  []string{OpList, OpGet, OpCreate, OpUpdate, OpDelete, OpReconcile},
 		Writable:    true,
 	})
 	register(&DataType{
 		ID: "oxygen-saturation", FilterName: "oxygen_saturation", TimeField: sample,
-		Category:    "health_metrics_and_measurements",
+		Category:    CategoryHealthMetricsAndMeasurements,
 		Description: "Blood oxygen saturation (SpO2)",
-		Operations:  []string{"list", "reconcile"},
+		Operations:  []string{OpList, OpReconcile},
 	})
 	register(&DataType{
 		ID: "blood-glucose", FilterName: "blood_glucose", TimeField: sample,
-		Category:    "health_metrics_and_measurements",
+		Category:    CategoryHealthMetricsAndMeasurements,
 		Description: "Blood glucose (mg/dL) with meal and measurement context",
-		Operations:  []string{"list", "get", "rollup", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpGet, OpRollup, OpDailyRollup, OpReconcile},
 	})
 	register(&DataType{
 		ID: "core-body-temperature", FilterName: "core_body_temperature", TimeField: sample,
-		Category:    "health_metrics_and_measurements",
+		Category:    CategoryHealthMetricsAndMeasurements,
 		Description: "Core body temperature (Celsius)",
-		Operations:  []string{"list", "get", "rollup", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpGet, OpRollup, OpDailyRollup, OpReconcile},
 	})
 
 	// --- Sleep ---
 
 	register(&DataType{
 		ID: "sleep", FilterName: "sleep", TimeField: interval,
-		Category:     "sleep",
+		Category:     CategorySleep,
 		Description:  "Sleep sessions with stages, summary, and duration",
-		Operations:   []string{"list", "get", "create", "update", "delete", "reconcile"},
+		Operations:   []string{OpList, OpGet, OpCreate, OpUpdate, OpDelete, OpReconcile},
 		Writable:     true,
 		FilterField:  "sleep.interval.civil_end_time", // sleep only supports end_time filtering
 		SmallPageCap: true,                            // API caps sleep list at 25 rows/page
@@ -385,45 +422,45 @@ func init() {
 
 	register(&DataType{
 		ID: "daily-resting-heart-rate", FilterName: "daily_resting_heart_rate", TimeField: daily,
-		Category:    "health_metrics_and_measurements",
+		Category:    CategoryHealthMetricsAndMeasurements,
 		Description: "Daily resting heart rate",
-		Operations:  []string{"list", "reconcile"},
+		Operations:  []string{OpList, OpReconcile},
 	})
 	register(&DataType{
 		ID: "daily-heart-rate-variability", FilterName: "daily_heart_rate_variability", TimeField: daily,
-		Category:    "health_metrics_and_measurements",
+		Category:    CategoryHealthMetricsAndMeasurements,
 		Description: "Daily heart rate variability summary",
-		Operations:  []string{"list", "reconcile"},
+		Operations:  []string{OpList, OpReconcile},
 	})
 	register(&DataType{
 		ID: "daily-oxygen-saturation", FilterName: "daily_oxygen_saturation", TimeField: daily,
-		Category:    "health_metrics_and_measurements",
+		Category:    CategoryHealthMetricsAndMeasurements,
 		Description: "Daily oxygen saturation summary",
-		Operations:  []string{"list", "reconcile"},
+		Operations:  []string{OpList, OpReconcile},
 	})
 	register(&DataType{
 		ID: "daily-respiratory-rate", FilterName: "daily_respiratory_rate", TimeField: daily,
-		Category:    "health_metrics_and_measurements",
+		Category:    CategoryHealthMetricsAndMeasurements,
 		Description: "Daily respiratory rate summary",
-		Operations:  []string{"list", "reconcile"},
+		Operations:  []string{OpList, OpReconcile},
 	})
 	register(&DataType{
 		ID: "daily-vo2-max", FilterName: "daily_vo2_max", TimeField: daily,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "Daily VO2 max summary",
-		Operations:  []string{"list", "reconcile"},
+		Operations:  []string{OpList, OpReconcile},
 	})
 	register(&DataType{
 		ID: "daily-sleep-temperature-derivations", FilterName: "daily_sleep_temperature_derivations", TimeField: daily,
-		Category:    "health_metrics_and_measurements",
+		Category:    CategoryHealthMetricsAndMeasurements,
 		Description: "Daily sleep temperature deviation from baseline",
-		Operations:  []string{"list", "reconcile"},
+		Operations:  []string{OpList, OpReconcile},
 	})
 	register(&DataType{
 		ID: "daily-heart-rate-zones", FilterName: "daily_heart_rate_zones", TimeField: daily,
-		Category:    "health_metrics_and_measurements",
+		Category:    CategoryHealthMetricsAndMeasurements,
 		Description: "Daily heart rate zone breakdown",
-		Operations:  []string{"reconcile"},
+		Operations:  []string{OpReconcile},
 		RollupOnly:  true,
 	})
 
@@ -431,57 +468,57 @@ func init() {
 
 	register(&DataType{
 		ID: "respiratory-rate-sleep-summary", FilterName: "respiratory_rate_sleep_summary", TimeField: sample,
-		Category:    "health_metrics_and_measurements",
+		Category:    CategoryHealthMetricsAndMeasurements,
 		Description: "Respiratory rate during sleep (per-stage breakdown)",
-		Operations:  []string{"list", "reconcile"},
+		Operations:  []string{OpList, OpReconcile},
 	})
 	register(&DataType{
 		ID: "run-vo2-max", FilterName: "run_vo2_max", TimeField: sample,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "VO2 max estimated from running activities",
-		Operations:  []string{"list", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpDailyRollup, OpReconcile},
 	})
 	register(&DataType{
 		ID: "sedentary-period", FilterName: "sedentary_period", TimeField: interval,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "Sedentary periods detected by the device",
-		Operations:  []string{"list", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpDailyRollup, OpReconcile},
 	})
 	register(&DataType{
 		ID: "swim-lengths-data", FilterName: "swim_lengths_data", TimeField: interval,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "Swim lengths with stroke type and count (use daily-rollup for strokeCountSum)",
-		Operations:  []string{"list", "rollup", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpRollup, OpDailyRollup, OpReconcile},
 	})
 	register(&DataType{
 		ID: "hydration-log", FilterName: "hydration_log", TimeField: interval,
-		Category:    "nutrition",
+		Category:    CategoryNutrition,
 		Description: "Hydration log entries",
-		Operations:  []string{"list", "get", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpGet, OpDailyRollup, OpReconcile},
 	})
 
 	// --- Rollup-only types (no list) ---
 
 	register(&DataType{
 		ID: "total-calories", FilterName: "total_calories", TimeField: interval,
-		Category:         "activity_and_fitness",
+		Category:         CategoryActivityAndFitness,
 		Description:      "Total calories burned (use daily-rollup for kcalSum)",
-		Operations:       []string{"daily-rollup"},
+		Operations:       []string{OpDailyRollup},
 		RollupOnly:       true,
 		ShortRollupRange: true,
 	})
 	register(&DataType{
 		ID: "time-in-heart-rate-zone", FilterName: "time_in_heart_rate_zone", TimeField: interval,
-		Category:    "activity_and_fitness",
+		Category:    CategoryActivityAndFitness,
 		Description: "Time spent in each heart rate zone",
-		Operations:  []string{"daily-rollup", "reconcile"},
+		Operations:  []string{OpDailyRollup, OpReconcile},
 		RollupOnly:  true,
 	})
 	register(&DataType{
 		ID: "calories-in-heart-rate-zone", FilterName: "calories_in_heart_rate_zone", TimeField: interval,
-		Category:         "activity_and_fitness",
+		Category:         CategoryActivityAndFitness,
 		Description:      "Calories burned per heart rate zone (rollup-only)",
-		Operations:       []string{"rollup", "daily-rollup", "reconcile"},
+		Operations:       []string{OpRollup, OpDailyRollup, OpReconcile},
 		RollupOnly:       true,
 		ShortRollupRange: true,
 	})
@@ -494,33 +531,33 @@ func init() {
 		ID: "electrocardiogram", FilterName: "electrocardiogram", TimeField: TimeFieldPhysicalIntervalStart,
 		Category:    "ecg",
 		Description: "ECG recordings with waveform samples and rhythm classification (requires ecg.readonly)",
-		Operations:  []string{"list"},
+		Operations:  []string{OpList},
 	})
 	register(&DataType{
 		ID: "irregular-rhythm-notification", FilterName: "irregular_rhythm_notification", TimeField: interval,
 		Category:    "irn",
 		Description: "Irregular rhythm notifications with alert windows (requires irn.readonly)",
-		Operations:  []string{"list"},
+		Operations:  []string{OpList},
 	})
 
 	// --- Nutrition ---
 
 	register(&DataType{
 		ID: "nutrition-log", FilterName: "nutrition_log", TimeField: interval,
-		Category:    "nutrition",
+		Category:    CategoryNutrition,
 		Description: "Logged food/nutrition entries with nutrient and energy breakdown",
-		Operations:  []string{"list", "get", "rollup", "daily-rollup", "reconcile"},
+		Operations:  []string{OpList, OpGet, OpRollup, OpDailyRollup, OpReconcile},
 	})
 	register(&DataType{
 		ID: "food", FilterName: "food", TimeField: TimeFieldNone,
-		Category:    "nutrition",
+		Category:    CategoryNutrition,
 		Description: "Food catalog entries with nutrient profiles (reference data, no time filter)",
-		Operations:  []string{"list", "get"},
+		Operations:  []string{OpList, OpGet},
 	})
 	register(&DataType{
 		ID: "food-measurement-unit", FilterName: "food_measurement_unit", TimeField: TimeFieldNone,
-		Category:    "nutrition",
+		Category:    CategoryNutrition,
 		Description: "Food measurement units (reference data, no time filter)",
-		Operations:  []string{"list", "get"},
+		Operations:  []string{OpList, OpGet},
 	})
 }
