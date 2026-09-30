@@ -108,7 +108,7 @@ func runSchemaType(cmd *cobra.Command, args []string) error {
 	if dt == nil {
 		return client.NewValidationError(
 			fmt.Sprintf("unknown data type: %s", name),
-			fmt.Sprintf("Run 'ghealth schema types' to see available types"),
+			"Run 'ghealth schema types' to see available types",
 		)
 	}
 

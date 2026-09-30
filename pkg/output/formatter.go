@@ -73,30 +73,40 @@ func PrintToFile(format string, data json.RawMessage, filePath string) error {
 		if len(previewRows) > 3 {
 			previewRows = previewRows[:3]
 		}
-		printRowsAsCSV(preview, previewRows)
+		if err := printRowsAsCSV(preview, previewRows); err != nil {
+			return err
+		}
 		fmt.Fprint(os.Stdout, preview.String())
 		return nil
 	case "table":
 		rows := extractRows(data)
 		if len(rows) > 0 {
-			printRowsAsTable(&buf, rows)
-		} else {
-			var v interface{}
-			json.Unmarshal(data, &v)
-			enc := json.NewEncoder(&buf)
-			enc.SetIndent("", "  ")
-			enc.Encode(v)
+			if err := printRowsAsTable(&buf, rows); err != nil {
+				return err
+			}
+		} else if err := writeIndentedJSON(&buf, data); err != nil {
+			return err
 		}
 	default: // json
-		var v interface{}
-		json.Unmarshal(data, &v)
-		enc := json.NewEncoder(&buf)
-		enc.SetIndent("", "  ")
-		enc.Encode(v)
+		if err := writeIndentedJSON(&buf, data); err != nil {
+			return err
+		}
 	}
 
 	count := countDataPoints(data)
 	return writeFileWithSummary(filePath, buf.Bytes(), format, count, nil)
+}
+
+// writeIndentedJSON pretty-prints data into buf, failing on invalid JSON
+// instead of silently writing "null".
+func writeIndentedJSON(buf *bytes.Buffer, data json.RawMessage) error {
+	var v interface{}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return fmt.Errorf("invalid JSON response: %w", err)
+	}
+	enc := json.NewEncoder(buf)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }
 
 func writeFileWithSummary(filePath string, content []byte, format string, count int, keys []string) error {
@@ -115,7 +125,7 @@ func extractRows(data json.RawMessage) []map[string]interface{} {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(data, &obj); err != nil {
 		var rows []map[string]interface{}
-		json.Unmarshal(data, &rows)
+		_ = json.Unmarshal(data, &rows) // best effort: non-JSON input yields no rows
 		return rows
 	}
 	for _, key := range []string{"dataPoints", "rollupDataPoints", "data", "items"} {
@@ -127,7 +137,7 @@ func extractRows(data json.RawMessage) []map[string]interface{} {
 		}
 	}
 	var rows []map[string]interface{}
-	json.Unmarshal(data, &rows)
+	_ = json.Unmarshal(data, &rows) // best effort: non-JSON input yields no rows
 	return rows
 }
 

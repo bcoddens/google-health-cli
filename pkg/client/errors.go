@@ -66,6 +66,15 @@ func (e *CLIError) ExitCode() int {
 	return e.Code
 }
 
+// AsCLIError reports whether err is, or wraps, a *CLIError.
+func AsCLIError(err error) (*CLIError, bool) {
+	var cliErr *CLIError
+	if errors.As(err, &cliErr) {
+		return cliErr, true
+	}
+	return nil, false
+}
+
 // WriteError writes a structured JSON error to stderr and returns the exit code.
 func WriteError(e *CLIError) int {
 	errJSON, _ := json.MarshalIndent(map[string]*CLIError{"error": e}, "", "  ")

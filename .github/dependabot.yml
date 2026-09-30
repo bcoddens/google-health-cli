@@ -1,0 +1,30 @@
+# Keeps two things from going stale silently:
+# - GitHub Actions in .github/workflows/ci.yml are pinned to full commit SHAs
+#   (see the `# vX.Y.Z` comments there) for supply-chain safety, which means
+#   nothing bumps them automatically without this.
+# - Go module dependencies in go.mod / go.sum.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Skip releases younger than a week: gives the ecosystem time to yank a
+    # compromised or broken release before Dependabot proposes it.
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"

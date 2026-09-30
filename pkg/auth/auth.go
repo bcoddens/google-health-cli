@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -172,7 +173,8 @@ func ValidateAccessToken(ctx context.Context, accessToken string) (*TokenInfo, e
 		return nil, fmt.Errorf("malformed tokeninfo response: %w", err)
 	}
 	expires := 0
-	fmt.Sscanf(info.ExpiresIn, "%d", &expires)
+	// An unparsable expires_in is reported as 0 rather than failing validation.
+	_, _ = fmt.Sscanf(info.ExpiresIn, "%d", &expires)
 	return &TokenInfo{
 		Audience:  info.Audience,
 		ExpiresIn: expires,
@@ -364,24 +366,27 @@ func WriteSecretFile(path string, data []byte) error {
 		return err
 	}
 	tmpName := tmp.Name()
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = os.Remove(tmpName)
+		}
+	}()
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Chmod(0600); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
 		return err
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
 		return err
 	}
+	renamed = true
 	return nil
 }
 
@@ -689,7 +694,7 @@ func InteractiveLogin(cs *ClientSecret, scopes []string) (*oauth2.Token, error) 
 		}
 		if e := r.URL.Query().Get("error"); e != "" {
 			errCh <- fmt.Errorf("OAuth error: %s", e)
-			fmt.Fprintf(w, "<html><body><h2>Authorization failed: %s</h2></body></html>", e)
+			fmt.Fprintf(w, "<html><body><h2>Authorization failed: %s</h2></body></html>", html.EscapeString(e))
 			return
 		}
 		code := r.URL.Query().Get("code")
@@ -702,7 +707,8 @@ func InteractiveLogin(cs *ClientSecret, scopes []string) (*oauth2.Token, error) 
 		fmt.Fprint(w, "<html><body><h2>Authentication successful</h2><p>You can close this window.</p></body></html>")
 	})
 
-	srv := &http.Server{Handler: mux}
+	// ReadHeaderTimeout bounds slow-header clients on the loopback listener.
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			errCh <- err

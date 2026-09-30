@@ -143,20 +143,6 @@ func promptInput(reader *bufio.Reader, prompt, defaultVal string) string {
 	return line
 }
 
-func promptConfirm(reader *bufio.Reader, prompt string, defaultYes bool) bool {
-	hint := "y/N"
-	if defaultYes {
-		hint = "Y/n"
-	}
-	fmt.Fprintf(os.Stderr, "  %s [%s]: ", prompt, hint)
-	line, _ := reader.ReadString('\n')
-	line = strings.TrimSpace(strings.ToLower(line))
-	if line == "" {
-		return defaultYes
-	}
-	return line == "y" || line == "yes"
-}
-
 // ─── Setup wizard ────────────────────────────────────────────────
 
 func runSetup(cmd *cobra.Command, args []string) error {

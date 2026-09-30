@@ -326,7 +326,7 @@ func doRequest(req *client.Request) error {
 	c := newClient()
 	resp, err := c.Do(req)
 	if err != nil {
-		if cliErr, ok := err.(*client.CLIError); ok {
+		if cliErr, ok := client.AsCLIError(err); ok {
 			return cliErr
 		}
 		return client.NewAPIError(0, err.Error(), "")
@@ -438,7 +438,7 @@ func executeDataList(req *client.Request, opts dataListOpts) error {
 		}
 		resp, err := c.Do(req)
 		if err != nil {
-			if cliErr, ok := err.(*client.CLIError); ok {
+			if cliErr, ok := client.AsCLIError(err); ok {
 				return nil, "", cliErr
 			}
 			return nil, "", client.NewAPIError(0, err.Error(), "")
@@ -515,7 +515,7 @@ func executeDataGet(req *client.Request, opts dataListOpts) error {
 	c := newClient()
 	resp, err := c.Do(req)
 	if err != nil {
-		if cliErr, ok := err.(*client.CLIError); ok {
+		if cliErr, ok := client.AsCLIError(err); ok {
 			return cliErr
 		}
 		return client.NewAPIError(0, err.Error(), "")
@@ -547,7 +547,7 @@ func executeDataRollup(req *client.Request, opts dataListOpts) error {
 	c := newClient()
 	resp, err := c.Do(req)
 	if err != nil {
-		if cliErr, ok := err.(*client.CLIError); ok {
+		if cliErr, ok := client.AsCLIError(err); ok {
 			return cliErr
 		}
 		return client.NewAPIError(0, err.Error(), "")
@@ -567,7 +567,7 @@ func executeDataRollup(req *client.Request, opts dataListOpts) error {
 			req.Body = pageBody
 			pageResp, err := c.Do(req)
 			if err != nil {
-				if cliErr, ok := err.(*client.CLIError); ok {
+				if cliErr, ok := client.AsCLIError(err); ok {
 					return nil, cliErr
 				}
 				return nil, client.NewAPIError(0, err.Error(), "")
@@ -1145,7 +1145,7 @@ func newExportTCXCommand(dt *types.DataType) *cobra.Command {
 			c := newClient()
 			resp, err := c.Do(req)
 			if err != nil {
-				if cliErr, ok := err.(*client.CLIError); ok {
+				if cliErr, ok := client.AsCLIError(err); ok {
 					return cliErr
 				}
 				return client.NewAPIError(0, err.Error(), "")

@@ -75,7 +75,7 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-func (c *Config) Save() error {
+func (c *Config) Save() (err error) {
 	path := ConfigPath()
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -86,7 +86,11 @@ func (c *Config) Save() error {
 	if err != nil {
 		return fmt.Errorf("failed to open config file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}()
 
 	return toml.NewEncoder(f).Encode(c)
 }

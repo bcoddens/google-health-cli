@@ -8,3 +8,9 @@ dist/
 !pkg/schema/bundled_snapshot.json
 .claude/
 .DS_Store
+
+# Local tooling output
+/reports/
+.scannerwork/
+.env.*
+!.env.example

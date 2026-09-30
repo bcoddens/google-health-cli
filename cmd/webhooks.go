@@ -255,7 +255,7 @@ func runWebhookReq(req *client.Request) error {
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		if cliErr, ok := err.(*client.CLIError); ok {
+		if cliErr, ok := client.AsCLIError(err); ok {
 			return cliErr
 		}
 		return client.NewAPIError(0, err.Error(), "")

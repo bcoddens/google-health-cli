@@ -1,0 +1,34 @@
+language: en-US
+reviews:
+  profile: chill
+  drafts: true
+  high_level_summary: true
+  request_changes_workflow: false
+  auto_review:
+    enabled: true
+    drafts: true
+  path_instructions:
+    - path: "pkg/auth/**"
+      instructions: >
+        Security-sensitive OAuth code. Check that token/secret files are
+        written 0600 (use WriteSecretFile, never a bare os.WriteFile), that
+        tokens and client secrets are never logged or echoed, that PKCE and
+        state validation cannot be bypassed, and that data-plane scopes are
+        never mixed with cloud-platform.
+    - path: "cmd/**"
+      instructions: >
+        Cobra commands. Errors must surface as *client.CLIError with the
+        documented exit codes (1 API, 2 auth, 3 validation, 4 network,
+        5 config); use client.AsCLIError, not type assertions. Output for
+        agents must stay valid JSON on stdout with errors as JSON on stderr.
+    - path: "pkg/types/registry.go"
+      instructions: >
+        Only data types verified against the live API belong here. Adding or
+        removing one also requires README.md and skills/ghealth/SKILL.md
+        updates.
+    - path: "pkg/output/**"
+      instructions: >
+        Output must not silently drop or coerce data (absent rollup days are
+        not zeros; CSV/table must keep hints/nextPageToken on stderr).
+chat:
+  auto_reply: true

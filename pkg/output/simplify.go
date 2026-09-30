@@ -49,7 +49,7 @@ func SimplifyResponse(data json.RawMessage, dataType string, raw bool) json.RawM
 		result := map[string]interface{}{"dataPoints": simplified}
 		if tok, ok := obj["nextPageToken"]; ok {
 			var t string
-			json.Unmarshal(tok, &t)
+			_ = json.Unmarshal(tok, &t) // best effort: unparsable token counts as none
 			if t != "" {
 				result["nextPageToken"] = t
 			}
@@ -92,7 +92,7 @@ func SimplifyResponse(data json.RawMessage, dataType string, raw bool) json.RawM
 		// complete when it is not.
 		if tok, ok := obj["nextPageToken"]; ok {
 			var t string
-			json.Unmarshal(tok, &t)
+			_ = json.Unmarshal(tok, &t) // best effort: unparsable token counts as none
 			if t != "" {
 				result := map[string]interface{}{
 					"rollupDataPoints": simplified,
@@ -140,7 +140,7 @@ func SimplifySleepResponse(data json.RawMessage, includeStages bool, raw bool) j
 	result := map[string]interface{}{"dataPoints": simplified}
 	if tok, ok := obj["nextPageToken"]; ok {
 		var t string
-		json.Unmarshal(tok, &t)
+		_ = json.Unmarshal(tok, &t) // best effort: unparsable token counts as none
 		if t != "" {
 			result["nextPageToken"] = t
 		}

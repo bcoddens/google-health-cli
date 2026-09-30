@@ -36,11 +36,11 @@ func GenerateHints(data json.RawMessage, dataType, operation string, limit int, 
 	// Count data points.
 	var dataPoints []json.RawMessage
 	if raw, ok := obj["dataPoints"]; ok {
-		json.Unmarshal(raw, &dataPoints)
+		_ = json.Unmarshal(raw, &dataPoints) // best effort: malformed value counts as no points
 	}
 	var rollupPoints []json.RawMessage
 	if raw, ok := obj["rollupDataPoints"]; ok {
-		json.Unmarshal(raw, &rollupPoints)
+		_ = json.Unmarshal(raw, &rollupPoints) // best effort: malformed value counts as no points
 	}
 
 	nPoints := len(dataPoints) + len(rollupPoints)
@@ -75,7 +75,7 @@ func GenerateHints(data json.RawMessage, dataType, operation string, limit int, 
 	if operation == "list" && dataType == "exercise" && len(dataPoints) > 0 {
 		// Parse first exercise to suggest HR correlation.
 		var dp map[string]interface{}
-		json.Unmarshal(dataPoints[0], &dp)
+		_ = json.Unmarshal(dataPoints[0], &dp) // best effort: hint is skipped when unparsable
 		if start, ok := dp["start"].(string); ok {
 			if end, ok := dp["end"].(string); ok {
 				hints = append(hints, fmt.Sprintf(
@@ -123,7 +123,7 @@ func toUTC(s string) string {
 func hasNextPage(obj map[string]json.RawMessage) bool {
 	if tok, ok := obj["nextPageToken"]; ok {
 		var t string
-		json.Unmarshal(tok, &t)
+		_ = json.Unmarshal(tok, &t) // best effort: unparsable token counts as none
 		return t != ""
 	}
 	return false
