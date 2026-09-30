@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +39,21 @@ var (
 	setupSkipEnable         bool
 	setupNonInteractiveAuth bool
 	setupInstructions       bool
+)
+
+// Seams for testing: production defaults route through the real OS streams
+// and the real OAuth implementations; tests substitute fakes so the wizard's
+// prompts, imports, and login step can be exercised without a terminal,
+// network access, or a real browser. gcloud invocation is not seamed here:
+// tests control it via PATH (a fake `gcloud` script ahead of the real one).
+var (
+	setupStdin  io.Reader = os.Stdin
+	setupStdout io.Writer = os.Stdout
+	setupStderr io.Writer = os.Stderr
+
+	setupDoInteractiveLogin    = auth.InteractiveLogin
+	setupDoNonInteractiveStart = auth.NonInteractiveStart
+	setupResolveUserEmail      = fetchUserEmail
 )
 
 var setupCmd = &cobra.Command{
@@ -102,24 +118,24 @@ const (
 )
 
 func header(step int, total int, title string) {
-	fmt.Fprintf(os.Stderr, "\n%s[%d/%d]%s %s%s%s\n", dim, step, total, reset, bold, title, reset)
-	fmt.Fprintf(os.Stderr, "%s%s%s\n", dim, strings.Repeat("─", 50), reset)
+	fmt.Fprintf(setupStderr, "\n%s[%d/%d]%s %s%s%s\n", dim, step, total, reset, bold, title, reset)
+	fmt.Fprintf(setupStderr, "%s%s%s\n", dim, strings.Repeat("─", 50), reset)
 }
 
 func info(msg string) {
-	fmt.Fprintf(os.Stderr, "  %s %s\n", arrow, msg)
+	fmt.Fprintf(setupStderr, "  %s %s\n", arrow, msg)
 }
 
 func success(msg string) {
-	fmt.Fprintf(os.Stderr, "  %s %s\n", check, msg)
+	fmt.Fprintf(setupStderr, "  %s %s\n", check, msg)
 }
 
 func warn(msg string) {
-	fmt.Fprintf(os.Stderr, "  %s!%s %s\n", yellow, reset, msg)
+	fmt.Fprintf(setupStderr, "  %s!%s %s\n", yellow, reset, msg)
 }
 
 func blank() {
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(setupStderr)
 }
 
 func plural(n int) string {
@@ -131,9 +147,9 @@ func plural(n int) string {
 
 func promptInput(reader *bufio.Reader, prompt, defaultVal string) string {
 	if defaultVal != "" {
-		fmt.Fprintf(os.Stderr, "  %s [%s%s%s]: ", prompt, dim, defaultVal, reset)
+		fmt.Fprintf(setupStderr, "  %s [%s%s%s]: ", prompt, dim, defaultVal, reset)
 	} else {
-		fmt.Fprintf(os.Stderr, "  %s: ", prompt)
+		fmt.Fprintf(setupStderr, "  %s: ", prompt)
 	}
 	line, _ := reader.ReadString('\n')
 	line = strings.TrimSpace(line)
@@ -159,15 +175,15 @@ func runSetup(cmd *cobra.Command, args []string) error {
 			"complete_command":   "ghealth setup --client-secret /path/to/client_secret.json",
 		}
 		data, _ := json.MarshalIndent(result, "", "  ")
-		fmt.Fprintln(os.Stdout, string(data))
+		fmt.Fprintln(setupStdout, string(data))
 		return nil
 	}
 
-	reader := bufio.NewReader(os.Stdin)
+	reader := bufio.NewReader(setupStdin)
 	totalSteps := 6
 
-	fmt.Fprintf(os.Stderr, "\n  %sghealth Setup%s\n", bold, reset)
-	fmt.Fprintf(os.Stderr, "  %s%s%s\n", dim, "Configure GCP project, OAuth credentials, and authenticate", reset)
+	fmt.Fprintf(setupStderr, "\n  %sghealth Setup%s\n", bold, reset)
+	fmt.Fprintf(setupStderr, "  %s%s%s\n", dim, "Configure GCP project, OAuth credentials, and authenticate", reset)
 	blank()
 
 	// ─── Step 1: GCP Project ID ──────────────────────────────────
@@ -207,10 +223,10 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	if secretPath == "" && !useExistingSecret {
 		info("Create OAuth credentials in your GCP project:")
 		blank()
-		fmt.Fprintf(os.Stderr, "  %s1.%s Open %s%shttps://console.cloud.google.com/apis/credentials?project=%s%s\n", bold, reset, cyan, dim, projectID, reset)
-		fmt.Fprintf(os.Stderr, "  %s2.%s Click %sCreate Credentials%s > %sOAuth client ID%s\n", bold, reset, bold, reset, bold, reset)
-		fmt.Fprintf(os.Stderr, "  %s3.%s Application type: %sDesktop app%s\n", bold, reset, bold, reset)
-		fmt.Fprintf(os.Stderr, "  %s4.%s Download the JSON file\n", bold, reset)
+		fmt.Fprintf(setupStderr, "  %s1.%s Open %s%shttps://console.cloud.google.com/apis/credentials?project=%s%s\n", bold, reset, cyan, dim, projectID, reset)
+		fmt.Fprintf(setupStderr, "  %s2.%s Click %sCreate Credentials%s > %sOAuth client ID%s\n", bold, reset, bold, reset, bold, reset)
+		fmt.Fprintf(setupStderr, "  %s3.%s Application type: %sDesktop app%s\n", bold, reset, bold, reset)
+		fmt.Fprintf(setupStderr, "  %s4.%s Download the JSON file\n", bold, reset)
 		blank()
 		secretPath = promptInput(reader, "Path to downloaded client_secret JSON", "")
 		if secretPath == "" {
@@ -249,7 +265,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		if _, err := exec.LookPath("gcloud"); err == nil {
 			info("Found gcloud, enabling Health API...")
 			enableCmd := exec.Command("gcloud", "services", "enable", "health.googleapis.com", "--project", projectID)
-			enableCmd.Stderr = os.Stderr
+			enableCmd.Stderr = setupStderr
 			if err := enableCmd.Run(); err != nil {
 				warn(fmt.Sprintf("Could not enable via gcloud: %v", err))
 				info(fmt.Sprintf("Enable manually: %shttps://console.cloud.google.com/apis/api/health.googleapis.com?project=%s%s", cyan, projectID, reset))
@@ -316,23 +332,23 @@ func runSetup(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		fmt.Fprintf(os.Stderr, "  %sRead-only scopes:%s\n", bold, reset)
+		fmt.Fprintf(setupStderr, "  %sRead-only scopes:%s\n", bold, reset)
 		for j, opt := range readOnlyScopes {
-			fmt.Fprintf(os.Stderr, "    %s%2d.%s %s\n", green, j+1, reset, opt.scope.Label)
+			fmt.Fprintf(setupStderr, "    %s%2d.%s %s\n", green, j+1, reset, opt.scope.Label)
 		}
 		blank()
-		fmt.Fprintf(os.Stderr, "  %sRead/write scopes:%s\n", bold, reset)
+		fmt.Fprintf(setupStderr, "  %sRead/write scopes:%s\n", bold, reset)
 		for j, opt := range readWriteScopes {
-			fmt.Fprintf(os.Stderr, "    %s%2d.%s %s\n", yellow, j+len(readOnlyScopes)+1, reset, opt.scope.Label)
+			fmt.Fprintf(setupStderr, "    %s%2d.%s %s\n", yellow, j+len(readOnlyScopes)+1, reset, opt.scope.Label)
 		}
 		blank()
 
 		allOptions := append(readOnlyScopes, readWriteScopes...)
 
-		fmt.Fprintf(os.Stderr, "  %sOptions:%s\n", dim, reset)
-		fmt.Fprintf(os.Stderr, "    %sEnter%s     = All readonly scopes (recommended)\n", bold, reset)
-		fmt.Fprintf(os.Stderr, "    %s*%s         = All data scopes (read + write; excludes cloud-platform)\n", bold, reset)
-		fmt.Fprintf(os.Stderr, "    %s1,2,5%s     = Specific scope numbers\n", bold, reset)
+		fmt.Fprintf(setupStderr, "  %sOptions:%s\n", dim, reset)
+		fmt.Fprintf(setupStderr, "    %sEnter%s     = All readonly scopes (recommended)\n", bold, reset)
+		fmt.Fprintf(setupStderr, "    %s*%s         = All data scopes (read + write; excludes cloud-platform)\n", bold, reset)
+		fmt.Fprintf(setupStderr, "    %s1,2,5%s     = Specific scope numbers\n", bold, reset)
 		blank()
 
 		scopeInput := promptInput(reader, "Select scopes", "")
@@ -361,7 +377,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 
 	blank()
-	fmt.Fprintf(os.Stderr, "  %sSelected:%s\n", bold, reset)
+	fmt.Fprintf(setupStderr, "  %sSelected:%s\n", bold, reset)
 	for _, s := range selectedScopes {
 		label := s
 		for _, si := range auth.AllScopes {
@@ -370,7 +386,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 				break
 			}
 		}
-		fmt.Fprintf(os.Stderr, "    %s %s\n", check, label)
+		fmt.Fprintf(setupStderr, "    %s %s\n", check, label)
 	}
 
 	// ─── Step 5: OAuth login ─────────────────────────────────────
@@ -385,25 +401,25 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	var email string
 	var pendingAuthURL string // populated when --non-interactive-auth; surfaced on stdout below
 	if setupNonInteractiveAuth {
-		authURL, _, err := auth.NonInteractiveStart(cs, selectedScopes)
+		authURL, _, err := setupDoNonInteractiveStart(cs, selectedScopes)
 		if err != nil {
 			return client.NewConfigError(err.Error(), "")
 		}
 		pendingAuthURL = authURL
 		info("Skipping browser login (--non-interactive-auth).")
 		info("Open this URL on any browser, authorize, then paste the redirected URL (or just the 'code' query parameter):")
-		fmt.Fprintf(os.Stderr, "\n  %s\n\n", authURL)
+		fmt.Fprintf(setupStderr, "\n  %s\n\n", authURL)
 		info("Then run: ghealth auth login --complete <code-or-url>")
 	} else {
 		info("Opening browser for Google OAuth consent...")
 		blank()
 
-		tok, err := auth.InteractiveLogin(cs, selectedScopes)
+		tok, err := setupDoInteractiveLogin(cs, selectedScopes)
 		if err != nil {
 			return client.NewAuthError(fmt.Sprintf("login failed: %v", err), "Check your OAuth credentials and try again")
 		}
 
-		email = fetchUserEmail(tok.AccessToken)
+		email = setupResolveUserEmail(tok.AccessToken)
 
 		creds := &auth.StoredCredentials{
 			AccessToken:  tok.AccessToken,
@@ -450,13 +466,13 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	// ─── Done ────────────────────────────────────────────────────
 
 	blank()
-	fmt.Fprintf(os.Stderr, "  %s%s Setup Complete %s\n", bold, check, reset)
+	fmt.Fprintf(setupStderr, "  %s%s Setup Complete %s\n", bold, check, reset)
 	blank()
 	if !setupNonInteractiveAuth {
-		fmt.Fprintf(os.Stderr, "  %sTry it out:%s\n", dim, reset)
-		fmt.Fprintf(os.Stderr, "    %s$ ghealth data steps list --from 2026-03-28%s\n", cyan, reset)
-		fmt.Fprintf(os.Stderr, "    %s$ ghealth data sleep list --from 2026-03-22%s\n", cyan, reset)
-		fmt.Fprintf(os.Stderr, "    %s$ ghealth schema types%s\n", cyan, reset)
+		fmt.Fprintf(setupStderr, "  %sTry it out:%s\n", dim, reset)
+		fmt.Fprintf(setupStderr, "    %s$ ghealth data steps list --from 2026-03-28%s\n", cyan, reset)
+		fmt.Fprintf(setupStderr, "    %s$ ghealth data sleep list --from 2026-03-22%s\n", cyan, reset)
+		fmt.Fprintf(setupStderr, "    %s$ ghealth schema types%s\n", cyan, reset)
 		blank()
 	}
 
@@ -481,6 +497,6 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		result["pending_auth_path"] = auth.PendingAuthPath()
 	}
 	data, _ := json.MarshalIndent(result, "", "  ")
-	fmt.Fprintln(os.Stdout, string(data))
+	fmt.Fprintln(setupStdout, string(data))
 	return nil
 }
