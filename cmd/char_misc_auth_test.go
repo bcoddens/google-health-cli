@@ -62,10 +62,20 @@ func miscCharDecodeJSONLine(t *testing.T, out string) map[string]interface{} {
 	return m
 }
 
+// miscCharIsolateAuth prevents developer credentials from selecting a
+// different source than the branch each characterization test intends.
+func miscCharIsolateAuth(t *testing.T) {
+	t.Helper()
+	t.Setenv("GHEALTH_CONFIG_DIR", t.TempDir())
+	t.Setenv("GHEALTH_ACCESS_TOKEN", "")
+	t.Setenv("GHEALTH_CREDENTIALS_FILE", "")
+}
+
 // TestMiscCharAuthStatus_EnvToken_NoValidate pins the "GHEALTH_ACCESS_TOKEN
 // set, --validate not passed" shape: configured but not authenticated, with
 // the note steering toward --validate.
 func TestMiscCharAuthStatus_EnvToken_NoValidate(t *testing.T) {
+	miscCharIsolateAuth(t)
 	t.Setenv("GHEALTH_CONFIG_DIR", t.TempDir())
 	t.Setenv("GHEALTH_ACCESS_TOKEN", "fake-token-value")
 	authStatusValidate = false
@@ -99,6 +109,7 @@ func TestMiscCharAuthStatus_EnvToken_NoValidate(t *testing.T) {
 // TestMiscCharAuthStatus_CredentialsFile_NoValidate pins the
 // GHEALTH_CREDENTIALS_FILE-without---validate shape.
 func TestMiscCharAuthStatus_CredentialsFile_NoValidate(t *testing.T) {
+	miscCharIsolateAuth(t)
 	t.Setenv("GHEALTH_CONFIG_DIR", t.TempDir())
 	credPath := t.TempDir() + "/creds.json"
 	t.Setenv("GHEALTH_CREDENTIALS_FILE", credPath)
@@ -133,6 +144,7 @@ func TestMiscCharAuthStatus_CredentialsFile_NoValidate(t *testing.T) {
 // TestMiscCharAuthStatus_NoCredentials_NoClientSecret pins the fresh-user
 // error path: no env vars, no stored credentials, no client_secret.json.
 func TestMiscCharAuthStatus_NoCredentials_NoClientSecret(t *testing.T) {
+	miscCharIsolateAuth(t)
 	t.Setenv("GHEALTH_CONFIG_DIR", t.TempDir())
 	authStatusValidate = false
 	defer func() { authStatusValidate = false }()
@@ -150,6 +162,7 @@ func TestMiscCharAuthStatus_NoCredentials_NoClientSecret(t *testing.T) {
 // TestMiscCharAuthStatus_NoCredentials_WithClientSecret pins the
 // "client_secret present but never logged in" error path.
 func TestMiscCharAuthStatus_NoCredentials_WithClientSecret(t *testing.T) {
+	miscCharIsolateAuth(t)
 	dir := t.TempDir()
 	t.Setenv("GHEALTH_CONFIG_DIR", dir)
 	if err := os.WriteFile(config.ClientSecretPath(), []byte(`{"installed":{}}`), 0o600); err != nil {
@@ -171,6 +184,7 @@ func TestMiscCharAuthStatus_NoCredentials_WithClientSecret(t *testing.T) {
 // TestMiscCharAuthStatus_StoredCredentials_NotExpired pins the stored-
 // credentials JSON shape (no --validate) when the token has not expired.
 func TestMiscCharAuthStatus_StoredCredentials_NotExpired(t *testing.T) {
+	miscCharIsolateAuth(t)
 	dir := t.TempDir()
 	t.Setenv("GHEALTH_CONFIG_DIR", dir)
 	authStatusValidate = false
@@ -228,6 +242,7 @@ func TestMiscCharAuthStatus_StoredCredentials_NotExpired(t *testing.T) {
 // TestMiscCharAuthStatus_StoredCredentials_Expired pins the expired-token
 // shape (no --validate): authenticated must flip false and expired true.
 func TestMiscCharAuthStatus_StoredCredentials_Expired(t *testing.T) {
+	miscCharIsolateAuth(t)
 	dir := t.TempDir()
 	t.Setenv("GHEALTH_CONFIG_DIR", dir)
 	authStatusValidate = false

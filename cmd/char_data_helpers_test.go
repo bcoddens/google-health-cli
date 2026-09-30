@@ -36,6 +36,11 @@ func dataCharWithServer(t *testing.T, handler http.HandlerFunc) *httptest.Server
 	client.BaseURL = srv.URL
 	t.Cleanup(func() { client.BaseURL = origBaseURL })
 	t.Setenv("GHEALTH_ACCESS_TOKEN", "dataChar-test-token")
+	t.Setenv("GHEALTH_FORMAT", "json")
+	t.Setenv("GHEALTH_CONFIG_DIR", t.TempDir())
+	originalFormat := flagFormat
+	flagFormat = "json"
+	t.Cleanup(func() { flagFormat = originalFormat })
 	return srv
 }
 
