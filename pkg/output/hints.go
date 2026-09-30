@@ -216,8 +216,8 @@ func InjectHints(data json.RawMessage, hints []string) json.RawMessage {
 	if err := json.Unmarshal(data, &arr); err == nil {
 		hintsJSON, _ := json.Marshal(hints)
 		wrapper := map[string]json.RawMessage{
-			"data":   data,
-			"_hints": hintsJSON,
+			rowDataKey: data,
+			"_hints":   hintsJSON,
 		}
 		out, _ := json.MarshalIndent(wrapper, "", "  ")
 		return out

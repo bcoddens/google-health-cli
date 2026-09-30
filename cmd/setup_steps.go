@@ -35,7 +35,7 @@ const setupTotalSteps = 6
 // errors would emit, on stdout, with exit 0.
 func printSetupInstructions() error {
 	result := map[string]interface{}{
-		"status":             "instructions",
+		authFieldStatus:      "instructions",
 		"message":            auth.ClientSecretSetupMessage + " (or none yet); follow next_steps to obtain one.",
 		"next_steps":         auth.ClientSecretSetupSteps(),
 		"client_secret_path": config.ClientSecretPath(),
@@ -248,7 +248,7 @@ func promptForScopes(reader *bufio.Reader) []string {
 
 func parseScopeSelection(scopeInput string, menu scopeMenu) []string {
 	switch strings.TrimSpace(scopeInput) {
-	case "", "default":
+	case "", profileDefault:
 		return readonlySuffixes(menu.readOnly)
 	case "*", "all":
 		scopes, _ := auth.ScopePreset("all")
@@ -403,7 +403,7 @@ func printSetupComplete(projectID, email string, selectedScopes []string, pendin
 		status = "setup_pending_auth"
 	}
 	result := map[string]interface{}{
-		"status":             status,
+		authFieldStatus:      status,
 		"project_id":         projectID,
 		"email":              email,
 		"scopes":             selectedScopes,

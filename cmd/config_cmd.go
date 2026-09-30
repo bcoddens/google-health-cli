@@ -53,7 +53,7 @@ var configProfilesCmd = &cobra.Command{
 }
 
 var configProfilesListCmd = &cobra.Command{
-	Use:   "list",
+	Use:   opList,
 	Short: "List all profiles",
 	RunE:  runConfigProfilesList,
 }
@@ -110,7 +110,7 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		profileName = flagProfile
 	}
 	if profileName == "" {
-		profileName = "default"
+		profileName = profileDefault
 	}
 
 	profile := cfg.ActiveProfile()
@@ -119,7 +119,7 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 	case "project_id":
 		profile.ProjectID = value
 	case "format":
-		valid := map[string]bool{"json": true, "table": true, "csv": true}
+		valid := map[string]bool{"json": true, "table": true, formatCSV: true}
 		if !valid[strings.ToLower(value)] {
 			return client.NewValidationError(fmt.Sprintf("invalid format: %s", value), "Valid formats: json, table, csv")
 		}
@@ -144,9 +144,9 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 	}
 
 	result := map[string]string{
-		"status": "updated",
-		"key":    key,
-		"value":  value,
+		authFieldStatus: "updated",
+		"key":           key,
+		"value":         value,
 	}
 	data, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Fprintln(os.Stdout, string(data))
@@ -164,7 +164,7 @@ func runConfigProfilesList(cmd *cobra.Command, args []string) error {
 		activeProfile = flagProfile
 	}
 	if activeProfile == "" {
-		activeProfile = "default"
+		activeProfile = profileDefault
 	}
 
 	type profileEntry struct {
@@ -175,8 +175,8 @@ func runConfigProfilesList(cmd *cobra.Command, args []string) error {
 
 	profiles := []profileEntry{
 		{
-			Name:      "default",
-			Active:    activeProfile == "default",
+			Name:      profileDefault,
+			Active:    activeProfile == profileDefault,
 			ProjectID: cfg.Default.ProjectID,
 		},
 	}
@@ -202,9 +202,9 @@ func runConfigProfilesSwitch(cmd *cobra.Command, args []string) error {
 		return client.NewConfigError(err.Error(), "")
 	}
 
-	if name != "default" {
+	if name != profileDefault {
 		if _, ok := cfg.Profiles[name]; !ok {
-			available := []string{"default"}
+			available := []string{profileDefault}
 			for n := range cfg.Profiles {
 				available = append(available, n)
 			}
@@ -221,9 +221,9 @@ func runConfigProfilesSwitch(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "  ghealth --profile %s <command>\n", name)
 
 	result := map[string]string{
-		"status":  "switch",
-		"profile": name,
-		"hint":    fmt.Sprintf("export GHEALTH_PROFILE=%s", name),
+		authFieldStatus: "switch",
+		"profile":       name,
+		"hint":          fmt.Sprintf("export GHEALTH_PROFILE=%s", name),
 	}
 	data, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Fprintln(os.Stdout, string(data))

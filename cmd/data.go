@@ -530,7 +530,7 @@ func marshalListResponse(points []json.RawMessage, remainingToken string) (json.
 
 func simplifyListResponse(merged json.RawMessage, opts dataListOpts, limit int, truncated bool, remainingToken string) json.RawMessage {
 	var simplified json.RawMessage
-	if opts.dataType == "sleep" {
+	if opts.dataType == dataTypeSleep {
 		simplified = output.SimplifySleepResponse(merged, opts.sleepDetail, flagRaw)
 	} else {
 		simplified = output.SimplifyResponse(merged, opts.dataType, flagRaw)
@@ -566,7 +566,7 @@ func executeDataGet(req *client.Request, opts dataListOpts) error {
 	})
 
 	var simplified json.RawMessage
-	if opts.dataType == "sleep" {
+	if opts.dataType == dataTypeSleep {
 		simplified = output.SimplifySleepResponse(merged, opts.sleepDetail, flagRaw)
 	} else {
 		simplified = output.SimplifyResponse(merged, opts.dataType, flagRaw)
@@ -599,7 +599,7 @@ func executeDataRollup(req *client.Request, opts dataListOpts) error {
 func paginateRollup(c *client.Client, req *client.Request, first json.RawMessage) (json.RawMessage, error) {
 	// Only POST rollup endpoints paginate with a body pageToken; reconcile is
 	// a GET and returns dataPoints, which collectRollupPages passes through.
-	if req.Method != "POST" || len(req.Body) == 0 {
+	if req.Method != httpMethodPost || len(req.Body) == 0 {
 		return first, nil
 	}
 	baseBody := req.Body
@@ -697,7 +697,7 @@ func newListCommand(dt *types.DataType) *cobra.Command {
 		detail           bool
 	)
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   opList,
 		Short: fmt.Sprintf("List %s data points", dt.ID),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			f, err := buildFilter(dt, from, to, filter)
@@ -709,7 +709,7 @@ func newListCommand(dt *types.DataType) *cobra.Command {
 				query.Set("filter", f)
 			}
 			req := &client.Request{
-				Method: "GET",
+				Method: httpMethodGet,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints", dt.ID),
 				Query:  query,
 			}
@@ -718,7 +718,7 @@ func newListCommand(dt *types.DataType) *cobra.Command {
 			}
 			return executeDataList(req, dataListOpts{
 				dataType:    dt.ID,
-				operation:   "list",
+				operation:   opList,
 				limit:       limit,
 				pageToken:   pageToken,
 				from:        from,
@@ -732,7 +732,7 @@ func newListCommand(dt *types.DataType) *cobra.Command {
 	cmd.Flags().StringVar(&filter, "filter", "", "Raw API filter (overrides --from/--to)")
 	cmd.Flags().IntVar(&limit, "limit", 0, "Max total results (default: 500)")
 	cmd.Flags().StringVar(&pageToken, "page-token", "", "Resume from a previous response's nextPageToken (fetches the next page losslessly)")
-	if dt.ID == "sleep" {
+	if dt.ID == dataTypeSleep {
 		cmd.Flags().BoolVar(&detail, "detail", false, "Include per-stage time breakdown")
 	}
 	return cmd
@@ -743,7 +743,7 @@ func newListCommand(dt *types.DataType) *cobra.Command {
 func newGetCommand(dt *types.DataType) *cobra.Command {
 	var id string
 	cmd := &cobra.Command{
-		Use:   "get",
+		Use:   opGet,
 		Short: fmt.Sprintf("Get a single %s data point by ID", dt.ID),
 		Long: fmt.Sprintf(`Retrieve one %s data point by its ID.
 
@@ -754,7 +754,7 @@ Use 'ghealth data %s list --limit 5' to find data point IDs.`, dt.ID, dt.ID),
 					fmt.Sprintf("Use 'ghealth data %s list --limit 5' to find data point IDs", dt.ID))
 			}
 			req := &client.Request{
-				Method: "GET",
+				Method: httpMethodGet,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints/%s", dt.ID, id),
 			}
 			if flagDryRun {
@@ -762,7 +762,7 @@ Use 'ghealth data %s list --limit 5' to find data point IDs.`, dt.ID, dt.ID),
 			}
 			return executeDataGet(req, dataListOpts{
 				dataType:  dt.ID,
-				operation: "get",
+				operation: opGet,
 			})
 		},
 	}
@@ -789,7 +789,7 @@ The API returns an Operation object (write operations are asynchronous).`, dt.ID
 					fmt.Sprintf("Use 'ghealth data %s list --raw --limit 1' to see the expected format", dt.ID))
 			}
 			req := &client.Request{
-				Method: "POST",
+				Method: httpMethodPost,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints", dt.ID),
 				Body:   []byte(jsonBody),
 			}
@@ -812,7 +812,7 @@ func newUpdateCommand(dt *types.DataType) *cobra.Command {
 		updateMask string
 	)
 	cmd := &cobra.Command{
-		Use:   "update",
+		Use:   opUpdate,
 		Short: fmt.Sprintf("Update %s data point", dt.ID),
 		Long: fmt.Sprintf(`Update an existing %s data point by ID.
 
@@ -881,7 +881,7 @@ The API returns an Operation object (write operations are asynchronous).`, dt.ID
 				"names": names,
 			})
 			req := &client.Request{
-				Method: "POST",
+				Method: httpMethodPost,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints:batchDelete", dt.ID),
 				Body:   body,
 			}
@@ -1014,7 +1014,7 @@ func newRollupCommand(dt *types.DataType) *cobra.Command {
 				}
 			}
 			req := &client.Request{
-				Method: "POST",
+				Method: httpMethodPost,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints:rollUp", dt.ID),
 				Body:   body,
 			}
@@ -1089,7 +1089,7 @@ func newDailyRollupCommand(dt *types.DataType) *cobra.Command {
 				}
 			}
 			req := &client.Request{
-				Method: "POST",
+				Method: httpMethodPost,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints:dailyRollUp", dt.ID),
 				Body:   body,
 			}
@@ -1125,7 +1125,7 @@ func newReconcileCommand(dt *types.DataType) *cobra.Command {
 				query.Set("filter", f)
 			}
 			req := &client.Request{
-				Method: "GET",
+				Method: httpMethodGet,
 				Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints:reconcile", dt.ID),
 				Query:  query,
 			}
@@ -1191,7 +1191,7 @@ func validateExportTCXOptions(id, outputFile, asFormat string) error {
 	if outputFile == "" {
 		return client.NewValidationError("--output is required", "Provide the output file path, or '-' for stdout")
 	}
-	if asFormat != "tcx" && asFormat != "csv" {
+	if asFormat != "tcx" && asFormat != formatCSV {
 		return client.NewValidationError(
 			fmt.Sprintf("invalid --as value: %s", asFormat),
 			"Use --as tcx (raw export) or --as csv (one row per trackpoint)",
@@ -1202,7 +1202,7 @@ func validateExportTCXOptions(id, outputFile, asFormat string) error {
 
 func exportTCXRequest(dataType, id string) *client.Request {
 	return &client.Request{
-		Method: "GET",
+		Method: httpMethodGet,
 		Path:   fmt.Sprintf("/users/me/dataTypes/%s/dataPoints/%s:exportExerciseTcx", dataType, id),
 		// alt=media returns raw XML instead of a JSON tcxData envelope.
 		Query: url.Values{"alt": {"media"}},
@@ -1210,7 +1210,7 @@ func exportTCXRequest(dataType, id string) *client.Request {
 }
 
 func formatTCXExport(body json.RawMessage, asFormat string) ([]byte, int, error) {
-	if asFormat != "csv" {
+	if asFormat != formatCSV {
 		return body, -1, nil
 	}
 	var buf bytes.Buffer

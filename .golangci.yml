@@ -16,6 +16,8 @@ linters:
   enable:
     - bodyclose
     - errorlint
+    - gocognit
+    - goconst
     - gosec
     - misspell
     - unconvert
@@ -31,6 +33,8 @@ linters:
         - (io.ReadCloser).Close
         - (*github.com/spf13/cobra.Command).MarkFlagRequired
         - os.Unsetenv
+    gocognit:
+      min-complexity: 16
     gosec:
       excludes:
         # Config/credential paths come from the user's own environment
@@ -45,6 +49,8 @@ linters:
     rules:
       - path: _test\.go
         linters:
+          - gocognit
+          - goconst
           - gosec
       # Each rule below is a reviewed false positive or deliberate design
       # choice, scoped to the one place it applies so gosec stays active

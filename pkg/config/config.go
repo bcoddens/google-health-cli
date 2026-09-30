@@ -24,8 +24,9 @@ import (
 )
 
 const (
-	DefaultConfigDir = ".config/ghealth"
-	ConfigFileName   = "config.toml"
+	DefaultConfigDir   = ".config/ghealth"
+	ConfigFileName     = "config.toml"
+	defaultProfileName = "default"
 )
 
 type Config struct {
@@ -101,10 +102,10 @@ func (c *Config) ActiveProfile() ProfileConfig {
 		name = os.Getenv("GHEALTH_PROFILE")
 	}
 	if name == "" {
-		name = "default"
+		name = defaultProfileName
 	}
 
-	if name == "default" {
+	if name == defaultProfileName {
 		return c.Default
 	}
 
@@ -116,7 +117,7 @@ func (c *Config) ActiveProfile() ProfileConfig {
 }
 
 func (c *Config) SetProfile(name string, profile ProfileConfig) {
-	if name == "default" {
+	if name == defaultProfileName {
 		c.Default = profile
 	} else {
 		if c.Profiles == nil {

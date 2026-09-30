@@ -47,24 +47,30 @@ const (
 // ScopePrefix is the common prefix for all Health API scopes.
 const ScopePrefix = "https://www.googleapis.com/auth/googlehealth."
 
-// cloudPlatformSuffix is the (unqualified) scope suffix used for the
-// Google-wide cloud-platform scope, which is not under ScopePrefix.
-const cloudPlatformSuffix = "cloud-platform"
+const (
+	cloudPlatformSuffix     = "cloud-platform"
+	categoryActivityFitness = "activity_and_fitness"
+	categoryHealthMetrics   = "health_metrics_and_measurements"
+	categorySleep           = "sleep"
+	categoryNutrition       = "nutrition"
+	categoryProfile         = "profile"
+	categorySettings        = "settings"
+)
 
 // AllScopes lists all available Health API OAuth scope suffixes.
 var AllScopes = []ScopeInfo{
-	{Suffix: "activity_and_fitness.readonly", Label: "Activity & Fitness (read)", Category: "activity_and_fitness"},
-	{Suffix: "activity_and_fitness", Label: "Activity & Fitness (read/write)", Category: "activity_and_fitness"},
-	{Suffix: "health_metrics_and_measurements.readonly", Label: "Health Metrics (read)", Category: "health_metrics_and_measurements"},
-	{Suffix: "health_metrics_and_measurements", Label: "Health Metrics (read/write)", Category: "health_metrics_and_measurements"},
-	{Suffix: "sleep.readonly", Label: "Sleep (read)", Category: "sleep"},
-	{Suffix: "sleep", Label: "Sleep (read/write)", Category: "sleep"},
-	{Suffix: "nutrition.readonly", Label: "Nutrition (read)", Category: "nutrition"},
-	{Suffix: "nutrition", Label: "Nutrition (read/write)", Category: "nutrition"},
-	{Suffix: "profile.readonly", Label: "Profile (read)", Category: "profile"},
-	{Suffix: "profile", Label: "Profile (read/write)", Category: "profile"},
-	{Suffix: "settings.readonly", Label: "Settings (read)", Category: "settings"},
-	{Suffix: "settings", Label: "Settings (read/write)", Category: "settings"},
+	{Suffix: "activity_and_fitness.readonly", Label: "Activity & Fitness (read)", Category: categoryActivityFitness},
+	{Suffix: categoryActivityFitness, Label: "Activity & Fitness (read/write)", Category: categoryActivityFitness},
+	{Suffix: "health_metrics_and_measurements.readonly", Label: "Health Metrics (read)", Category: categoryHealthMetrics},
+	{Suffix: categoryHealthMetrics, Label: "Health Metrics (read/write)", Category: categoryHealthMetrics},
+	{Suffix: "sleep.readonly", Label: "Sleep (read)", Category: categorySleep},
+	{Suffix: categorySleep, Label: "Sleep (read/write)", Category: categorySleep},
+	{Suffix: "nutrition.readonly", Label: "Nutrition (read)", Category: categoryNutrition},
+	{Suffix: categoryNutrition, Label: "Nutrition (read/write)", Category: categoryNutrition},
+	{Suffix: "profile.readonly", Label: "Profile (read)", Category: categoryProfile},
+	{Suffix: categoryProfile, Label: "Profile (read/write)", Category: categoryProfile},
+	{Suffix: "settings.readonly", Label: "Settings (read)", Category: categorySettings},
+	{Suffix: categorySettings, Label: "Settings (read/write)", Category: categorySettings},
 	{Suffix: "location.readonly", Label: "Location (read)", Category: "location"},
 	{Suffix: "ecg.readonly", Label: "Electrocardiogram (read)", Category: "ecg"},
 	{Suffix: "irn.readonly", Label: "Irregular Rhythm Notifications (read)", Category: "irn"},

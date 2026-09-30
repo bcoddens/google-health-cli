@@ -31,11 +31,12 @@ const (
 	formatJSON  = "json"
 	formatTable = "table"
 	formatCSV   = "csv"
+	rowDataKey  = "data"
 )
 
 // rowArrayKeys lists, in priority order, the object keys that may hold a
 // tabular row array in a Health API response (raw or simplified).
-var rowArrayKeys = []string{"dataPoints", "rollupDataPoints", "data", "items"}
+var rowArrayKeys = []string{"dataPoints", "rollupDataPoints", rowDataKey, "items"}
 
 // Print outputs data in the specified format to stdout.
 func Print(format string, data json.RawMessage) error {
