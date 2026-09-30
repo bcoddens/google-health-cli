@@ -27,6 +27,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// errFailedToEncodeOutput is returned when json.MarshalIndent unexpectedly
+// fails while preparing a schema command's response payload.
+const errFailedToEncodeOutput = "failed to encode output"
+
 var schemaCmd = &cobra.Command{
 	Use:   "schema",
 	Short: "Explore API schema, data types, scopes, and endpoints",
@@ -96,7 +100,7 @@ func runSchemaTypes(cmd *cobra.Command, args []string) error {
 
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		return client.NewValidationError("failed to encode output", "")
+		return client.NewValidationError(errFailedToEncodeOutput, "")
 	}
 
 	return printOutput(json.RawMessage(data))
@@ -142,7 +146,7 @@ func runSchemaType(cmd *cobra.Command, args []string) error {
 
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		return client.NewValidationError("failed to encode output", "")
+		return client.NewValidationError(errFailedToEncodeOutput, "")
 	}
 
 	return printOutput(json.RawMessage(data))
@@ -250,7 +254,7 @@ func runSchemaScopes(cmd *cobra.Command, args []string) error {
 
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		return client.NewValidationError("failed to encode output", "")
+		return client.NewValidationError(errFailedToEncodeOutput, "")
 	}
 
 	return printOutput(json.RawMessage(data))
@@ -326,7 +330,7 @@ func runSchemaEndpoints(cmd *cobra.Command, args []string) error {
 
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		return client.NewValidationError("failed to encode output", "")
+		return client.NewValidationError(errFailedToEncodeOutput, "")
 	}
 
 	return printOutput(json.RawMessage(data))
@@ -392,43 +396,57 @@ func parseSchemaFields(schemaRaw json.RawMessage, allSchemas map[string]json.Raw
 
 	fields := make([]map[string]interface{}, 0, len(names))
 	for _, name := range names {
-		prop := s.Properties[name]
-		f := map[string]interface{}{
-			"name": name,
-		}
-
-		// Determine type and resolve $ref.
-		if prop.Ref != "" {
-			f["type"] = "object"
-			if subProps := resolveRefProperties(prop.Ref, allSchemas); len(subProps) > 0 {
-				f["properties"] = subProps
-			}
-		} else if prop.Type == "array" && prop.Items != nil && prop.Items.Ref != "" {
-			f["type"] = "array"
-			if subProps := resolveRefProperties(prop.Items.Ref, allSchemas); len(subProps) > 0 {
-				f["itemProperties"] = subProps
-			}
-		} else if prop.Type != "" {
-			f["type"] = prop.Type
-		}
-
-		if prop.Format != "" {
-			f["format"] = prop.Format
-		}
-		if prop.Description != "" {
-			f["description"] = prop.Description
-			// Extract required/optional from description prefix.
-			if strings.HasPrefix(prop.Description, "Required.") {
-				f["required"] = true
-			}
-		}
-		if len(prop.Enum) > 0 {
-			f["enum"] = prop.Enum
-		}
-
-		fields = append(fields, f)
+		fields = append(fields, buildSchemaField(name, s.Properties[name], allSchemas))
 	}
 	return fields
+}
+
+// buildSchemaField converts a single discovery-schema property into the
+// field map used by the schema-type/endpoints output.
+func buildSchemaField(name string, prop schemaProperty, allSchemas map[string]json.RawMessage) map[string]interface{} {
+	f := map[string]interface{}{
+		"name": name,
+	}
+	applySchemaFieldType(f, prop, allSchemas)
+	applySchemaFieldMetadata(f, prop)
+	return f
+}
+
+// applySchemaFieldType sets "type" and, for $ref/array-of-$ref properties,
+// the resolved "properties"/"itemProperties" from allSchemas.
+func applySchemaFieldType(f map[string]interface{}, prop schemaProperty, allSchemas map[string]json.RawMessage) {
+	switch {
+	case prop.Ref != "":
+		f["type"] = "object"
+		if subProps := resolveRefProperties(prop.Ref, allSchemas); len(subProps) > 0 {
+			f["properties"] = subProps
+		}
+	case prop.Type == "array" && prop.Items != nil && prop.Items.Ref != "":
+		f["type"] = "array"
+		if subProps := resolveRefProperties(prop.Items.Ref, allSchemas); len(subProps) > 0 {
+			f["itemProperties"] = subProps
+		}
+	case prop.Type != "":
+		f["type"] = prop.Type
+	}
+}
+
+// applySchemaFieldMetadata sets "format", "description" (plus the derived
+// "required" flag from a "Required." description prefix), and "enum".
+func applySchemaFieldMetadata(f map[string]interface{}, prop schemaProperty) {
+	if prop.Format != "" {
+		f["format"] = prop.Format
+	}
+	if prop.Description != "" {
+		f["description"] = prop.Description
+		// Extract required/optional from description prefix.
+		if strings.HasPrefix(prop.Description, "Required.") {
+			f["required"] = true
+		}
+	}
+	if len(prop.Enum) > 0 {
+		f["enum"] = prop.Enum
+	}
 }
 
 // resolveRefProperties looks up a $ref schema and returns its property names.
