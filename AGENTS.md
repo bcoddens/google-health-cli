@@ -49,6 +49,19 @@ External reviewers (both optional locally, both keep secrets out of the repo):
 
 Use `client.AsCLIError(err)` instead of `err.(*client.CLIError)`, and write token/secret files with `auth.WriteSecretFile` (mode 0600, atomic) — never a bare `os.WriteFile`.
 
+## Local end-to-end harness
+
+`make e2e-local` builds and exercises the real `ghealth` binary against an
+isolated local fake Health API. Once Go modules are available, it needs no
+credentials, Docker, or external network access and is intentionally not part
+of CI.
+
+Use `go run -tags local_e2e ./tools/local-e2e -run pagination -verbose` to run
+one scenario. Add `-keep` to retain the temporary workspace for diagnosis.
+
+The local harness does not cover browser OAuth/token exchange, live discovery,
+webhooks/GCP IAM, or live Health API semantics; those require external systems.
+
 ## Workflow
 
 - Feature branches + PRs — never commit to main directly

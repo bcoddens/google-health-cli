@@ -7,7 +7,7 @@ COVERAGE_MIN ?= 80
 
 GO_FILES := $(shell git ls-files '*.go')
 
-.PHONY: check fmt fmt-check vet lint test cover vuln shellcheck secrets sonar coderabbit
+.PHONY: check fmt fmt-check vet lint test cover e2e-local vuln shellcheck secrets sonar coderabbit
 
 check: fmt-check vet lint test cover vuln shellcheck ## everything CI runs (except secrets)
 
@@ -26,6 +26,9 @@ lint: ## golangci-lint (config: .golangci.yml)
 
 test: ## unit tests with the race detector
 	go test -race -count=1 ./...
+
+e2e-local: ## compiled-binary E2E against a local fake Health API
+	go run -tags local_e2e ./tools/local-e2e
 
 cover: ## tests + total-coverage gate (writes reports/coverage.out)
 	@mkdir -p reports
