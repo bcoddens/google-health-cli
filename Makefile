@@ -1,11 +1,9 @@
 # Developer entry points. CI runs these same targets, so a green `make check`
 # locally is the same bar the pipeline enforces.
 
-# Minimum total statement coverage (percent). Measured at 46.3% when the gate
-# was introduced; set just below so the gate blocks regressions without
-# pretending coverage is higher than it is. Raise it as tests are added
-# (largest gaps: cmd/data.go, pkg/auth/auth.go, pkg/schema).
-COVERAGE_MIN ?= 45
+# Minimum total statement coverage (percent). Keep this below the measured
+# project coverage so the gate catches regressions without becoming flaky.
+COVERAGE_MIN ?= 80
 
 GO_FILES := $(shell git ls-files '*.go')
 

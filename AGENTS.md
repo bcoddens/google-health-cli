@@ -37,7 +37,7 @@ Verify against the live API: `ghealth auth status`, then `ghealth data steps dai
 | `make fmt-check` / `make fmt` | gofmt cleanliness / rewrite |
 | `make vet`, `make lint` | `go vet`, golangci-lint (`.golangci.yml`; gosec exclusions are scoped and commented) |
 | `make test` | unit tests with `-race` |
-| `make cover` | tests + total-coverage gate (`COVERAGE_MIN`, currently 45%; measured 46.3% when introduced — raise it as tests are added) |
+| `make cover` | tests + total-coverage gate (`COVERAGE_MIN`, currently 80%; measured 81.7%) |
 | `make vuln` | `govulncheck ./...` |
 | `make shellcheck` | `scripts/*.sh` |
 | `make secrets` | gitleaks full-history scan |
