@@ -81,6 +81,9 @@ func PrintToFile(format string, data json.RawMessage, filePath string) error {
 	case "table":
 		rows := extractRows(data)
 		if len(rows) > 0 {
+			// Same contract as CSV/stdout table output: the file holds rows
+			// only, so surface _hints and a leftover nextPageToken on stderr.
+			fwarnDroppedSignals(os.Stderr, data)
 			if err := printRowsAsTable(&buf, rows); err != nil {
 				return err
 			}
@@ -98,15 +101,15 @@ func PrintToFile(format string, data json.RawMessage, filePath string) error {
 }
 
 // writeIndentedJSON pretty-prints data into buf, failing on invalid JSON
-// instead of silently writing "null".
+// instead of silently writing "null". It indents the original bytes rather
+// than decoding into interface{} and re-encoding, which would round integers
+// above 2^53 through float64, rewrite 1.10 as 1.1, and reorder object keys.
 func writeIndentedJSON(buf *bytes.Buffer, data json.RawMessage) error {
-	var v interface{}
-	if err := json.Unmarshal(data, &v); err != nil {
+	if err := json.Indent(buf, data, "", "  "); err != nil {
 		return fmt.Errorf("invalid JSON response: %w", err)
 	}
-	enc := json.NewEncoder(buf)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
+	buf.WriteByte('\n')
+	return nil
 }
 
 func writeFileWithSummary(filePath string, content []byte, format string, count int, keys []string) error {
@@ -178,16 +181,14 @@ func countDataPoints(data json.RawMessage) int {
 
 // PrintJSON outputs pretty-printed JSON.
 func PrintJSON(data json.RawMessage) error {
-	var v interface{}
-	if err := json.Unmarshal(data, &v); err != nil {
+	var buf bytes.Buffer
+	if err := writeIndentedJSON(&buf, data); err != nil {
 		// If it's not valid JSON, print raw.
 		fmt.Println(string(data))
 		return nil
 	}
-
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
+	_, err := os.Stdout.Write(buf.Bytes())
+	return err
 }
 
 // PrintTable outputs data as an aligned table. extractRows handles both
