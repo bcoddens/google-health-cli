@@ -47,6 +47,10 @@ const (
 // ScopePrefix is the common prefix for all Health API scopes.
 const ScopePrefix = "https://www.googleapis.com/auth/googlehealth."
 
+// cloudPlatformSuffix is the (unqualified) scope suffix used for the
+// Google-wide cloud-platform scope, which is not under ScopePrefix.
+const cloudPlatformSuffix = "cloud-platform"
+
 // AllScopes lists all available Health API OAuth scope suffixes.
 var AllScopes = []ScopeInfo{
 	{Suffix: "activity_and_fitness.readonly", Label: "Activity & Fitness (read)", Category: "activity_and_fitness"},
@@ -64,7 +68,7 @@ var AllScopes = []ScopeInfo{
 	{Suffix: "location.readonly", Label: "Location (read)", Category: "location"},
 	{Suffix: "ecg.readonly", Label: "Electrocardiogram (read)", Category: "ecg"},
 	{Suffix: "irn.readonly", Label: "Irregular Rhythm Notifications (read)", Category: "irn"},
-	{Suffix: "cloud-platform", Label: "Cloud Platform (manage webhook subscribers/subscriptions)", Category: "webhooks"},
+	{Suffix: cloudPlatformSuffix, Label: "Cloud Platform (manage webhook subscribers/subscriptions)", Category: "webhooks"},
 }
 
 // CloudPlatformScope is the full OAuth scope required for the project-level
@@ -84,7 +88,7 @@ func FullScope(suffix string) string {
 		return suffix
 	}
 	// cloud-platform is a Google-wide scope, not under the googlehealth. prefix.
-	if suffix == "cloud-platform" {
+	if suffix == cloudPlatformSuffix {
 		return CloudPlatformScope
 	}
 	return ScopePrefix + suffix
@@ -191,27 +195,55 @@ func ScopePreset(name string) ([]string, error) {
 	case "":
 		return nil, fmt.Errorf("empty scope preset")
 	case "readonly":
-		var out []string
-		for _, s := range AllScopes {
-			if strings.HasSuffix(s.Suffix, ".readonly") {
-				out = append(out, s.Suffix)
-			}
-		}
-		return out, nil
+		return readonlyScopes(), nil
 	case "all":
-		// cloud-platform is excluded: it is only for webhook management and
-		// data-plane endpoints reject tokens that carry it. Request it
-		// explicitly (--scopes cloud-platform / category "webhooks").
-		out := make([]string, 0, len(AllScopes))
-		for _, s := range AllScopes {
-			if s.Suffix == "cloud-platform" {
-				continue
-			}
-			out = append(out, s.Suffix)
-		}
-		return out, nil
+		return allDataScopes(), nil
 	}
 
+	out, err := expandCategories(name)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("scope preset %q resolved to no scopes", name)
+	}
+	if err := rejectMixedCloudPlatform(out, name); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// readonlyScopes returns every .readonly scope suffix across all categories.
+func readonlyScopes() []string {
+	var out []string
+	for _, s := range AllScopes {
+		if strings.HasSuffix(s.Suffix, ".readonly") {
+			out = append(out, s.Suffix)
+		}
+	}
+	return out
+}
+
+// allDataScopes returns every scope suffix except cloud-platform, which is
+// excluded: it is only for webhook management and data-plane endpoints
+// reject tokens that carry it. Request it explicitly (--scopes cloud-platform
+// / category "webhooks").
+func allDataScopes() []string {
+	out := make([]string, 0, len(AllScopes))
+	for _, s := range AllScopes {
+		if s.Suffix == cloudPlatformSuffix {
+			continue
+		}
+		out = append(out, s.Suffix)
+	}
+	return out
+}
+
+// expandCategories resolves a comma-separated list of category names (from
+// name, not the trimmed switch value used above — leading/trailing commas
+// and per-item whitespace are handled here) into scope suffixes, preferring
+// each category's .readonly variant when one exists.
+func expandCategories(name string) ([]string, error) {
 	known := make(map[string][]string)
 	for _, s := range AllScopes {
 		known[s.Category] = append(known[s.Category], s.Suffix)
@@ -226,31 +258,41 @@ func ScopePreset(name string) ([]string, error) {
 		if !ok {
 			return nil, fmt.Errorf("unknown scope preset or category %q (valid: readonly, all, or category names like 'sleep,activity_and_fitness')", c)
 		}
-		readonlyFound := false
-		for _, suffix := range matches {
-			if strings.HasSuffix(suffix, ".readonly") {
-				out = append(out, suffix)
-				readonlyFound = true
-			}
-		}
-		if !readonlyFound {
-			out = append(out, matches...)
-		}
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("scope preset %q resolved to no scopes", name)
-	}
-	// A token carrying cloud-platform is rejected by the data-plane endpoints,
-	// so combining it with any other scope yields a token that is useless for
-	// both. Webhook management needs its own login (see 'ghealth webhooks --help').
-	if len(out) > 1 {
-		for _, s := range out {
-			if s == "cloud-platform" {
-				return nil, fmt.Errorf("scope preset %q mixes cloud-platform with data scopes; request 'webhooks' on its own and use a separate GHEALTH_CONFIG_DIR", name)
-			}
-		}
+		out = append(out, categoryScopes(matches)...)
 	}
 	return out, nil
+}
+
+// categoryScopes prefers the .readonly suffixes within a category when any
+// exist, otherwise returns every suffix in the category (read/write pairs).
+func categoryScopes(matches []string) []string {
+	var readonly []string
+	for _, suffix := range matches {
+		if strings.HasSuffix(suffix, ".readonly") {
+			readonly = append(readonly, suffix)
+		}
+	}
+	if len(readonly) > 0 {
+		return readonly
+	}
+	return matches
+}
+
+// rejectMixedCloudPlatform reports an error if out mixes cloud-platform with
+// any other scope: a token carrying cloud-platform is rejected by the
+// data-plane endpoints, so combining it with any other scope yields a token
+// that is useless for both. Webhook management needs its own login (see
+// 'ghealth webhooks --help').
+func rejectMixedCloudPlatform(out []string, name string) error {
+	if len(out) <= 1 {
+		return nil
+	}
+	for _, s := range out {
+		if s == cloudPlatformSuffix {
+			return fmt.Errorf("scope preset %q mixes cloud-platform with data scopes; request 'webhooks' on its own and use a separate GHEALTH_CONFIG_DIR", name)
+		}
+	}
+	return nil
 }
 
 // TokenSource provides access tokens for API requests.
