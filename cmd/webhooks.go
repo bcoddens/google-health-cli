@@ -38,6 +38,9 @@ const (
 	// flagDescParentSubscriberID is the shared help text for the
 	// "--subscriber" flag across the subscription commands.
 	flagDescParentSubscriberID = "Parent subscriber ID (required)"
+	// webhookFieldUpdateMask is the query-param name for PATCH update-mask
+	// requests, shared by both the subscriber and subscription update paths.
+	webhookFieldUpdateMask = "updateMask"
 )
 
 // Webhooks are delivered through the project-level subscribers/subscriptions
@@ -86,25 +89,25 @@ var webhooksSubscribersCmd = &cobra.Command{
 }
 
 var webhooksSubscribersListCmd = &cobra.Command{
-	Use:   "list",
+	Use:   opList,
 	Short: "List webhook subscribers in the project",
 	RunE:  runSubscribersList,
 }
 
 var webhooksSubscribersCreateCmd = &cobra.Command{
-	Use:   "create",
+	Use:   opCreate,
 	Short: "Create a webhook subscriber endpoint",
 	RunE:  runSubscribersCreate,
 }
 
 var webhooksSubscribersUpdateCmd = &cobra.Command{
-	Use:   "update",
+	Use:   opUpdate,
 	Short: "Update a webhook subscriber (raw JSON body)",
 	RunE:  runSubscribersUpdate,
 }
 
 var webhooksSubscribersDeleteCmd = &cobra.Command{
-	Use:   "delete",
+	Use:   opDelete,
 	Short: "Delete a webhook subscriber",
 	RunE:  runSubscribersDelete,
 }
@@ -117,25 +120,25 @@ var webhooksSubscriptionsCmd = &cobra.Command{
 }
 
 var webhooksSubscriptionsListCmd = &cobra.Command{
-	Use:   "list",
+	Use:   opList,
 	Short: "List subscriptions under a subscriber",
 	RunE:  runSubscriptionsList,
 }
 
 var webhooksSubscriptionsCreateCmd = &cobra.Command{
-	Use:   "create",
+	Use:   opCreate,
 	Short: "Create a subscription under a subscriber",
 	RunE:  runSubscriptionsCreate,
 }
 
 var webhooksSubscriptionsUpdateCmd = &cobra.Command{
-	Use:   "update",
+	Use:   opUpdate,
 	Short: "Update a subscription (raw JSON body)",
 	RunE:  runSubscriptionsUpdate,
 }
 
 var webhooksSubscriptionsDeleteCmd = &cobra.Command{
-	Use:   "delete",
+	Use:   opDelete,
 	Short: "Delete a subscription",
 	RunE:  runSubscriptionsDelete,
 }
@@ -282,7 +285,7 @@ func runSubscribersList(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	return runWebhookReq(&client.Request{Method: "GET", Path: "/" + parent + "/subscribers"})
+	return runWebhookReq(&client.Request{Method: httpMethodGet, Path: "/" + parent + "/subscribers"})
 }
 
 func runSubscribersCreate(cmd *cobra.Command, args []string) error {
@@ -305,14 +308,14 @@ func runSubscribersCreate(cmd *cobra.Command, args []string) error {
 				"Use AUTOMATIC or MANUAL")
 		}
 		body["subscriberConfigs"] = []map[string]interface{}{{
-			"dataTypes":                types,
+			schemaFieldDataTypes:       types,
 			"subscriptionCreatePolicy": policy,
 		}}
 	}
 
 	bodyJSON, _ := json.Marshal(body)
 	req := &client.Request{
-		Method:      "POST",
+		Method:      httpMethodPost,
 		Path:        "/" + parent + "/subscribers",
 		Body:        bodyJSON,
 		ContentType: webhookContentTypeJSON,
@@ -332,13 +335,13 @@ func runSubscribersUpdate(cmd *cobra.Command, args []string) error {
 		return client.NewValidationError("invalid JSON body", "Provide valid JSON via --json")
 	}
 	req := &client.Request{
-		Method:      "PATCH",
+		Method:      httpMethodPatch,
 		Path:        "/" + parent + webhookSubscribersSegment + flagWhSubscriberID,
 		Body:        []byte(flagWhJSON),
 		ContentType: webhookContentTypeJSON,
 	}
 	if flagWhUpdateMask != "" {
-		req.Query = url.Values{"updateMask": {flagWhUpdateMask}}
+		req.Query = url.Values{webhookFieldUpdateMask: {flagWhUpdateMask}}
 	}
 	return runWebhookReq(req)
 }
@@ -349,7 +352,7 @@ func runSubscribersDelete(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	req := &client.Request{
-		Method: "DELETE",
+		Method: httpMethodDelete,
 		Path:   "/" + parent + webhookSubscribersSegment + flagWhSubscriberID,
 	}
 	if flagWhForce {
@@ -366,7 +369,7 @@ func runSubscriptionsList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	path := "/" + parent + webhookSubscribersSegment + flagWhSubscriberID + "/subscriptions"
-	return runWebhookReq(&client.Request{Method: "GET", Path: path})
+	return runWebhookReq(&client.Request{Method: httpMethodGet, Path: path})
 }
 
 func runSubscriptionsCreate(cmd *cobra.Command, args []string) error {
@@ -378,11 +381,11 @@ func runSubscriptionsCreate(cmd *cobra.Command, args []string) error {
 		"user": flagWhUser,
 	}
 	if types := splitTypes(flagWhTypes); len(types) > 0 {
-		body["dataTypes"] = types
+		body[schemaFieldDataTypes] = types
 	}
 	bodyJSON, _ := json.Marshal(body)
 	req := &client.Request{
-		Method:      "POST",
+		Method:      httpMethodPost,
 		Path:        "/" + parent + webhookSubscribersSegment + flagWhSubscriberID + "/subscriptions",
 		Body:        bodyJSON,
 		ContentType: webhookContentTypeJSON,
@@ -402,13 +405,13 @@ func runSubscriptionsUpdate(cmd *cobra.Command, args []string) error {
 		return client.NewValidationError("invalid JSON body", "Provide valid JSON via --json")
 	}
 	req := &client.Request{
-		Method:      "PATCH",
+		Method:      httpMethodPatch,
 		Path:        "/" + parent + webhookSubscribersSegment + flagWhSubscriberID + "/subscriptions/" + flagWhSubscriptionID,
 		Body:        []byte(flagWhJSON),
 		ContentType: webhookContentTypeJSON,
 	}
 	if flagWhUpdateMask != "" {
-		req.Query = url.Values{"updateMask": {flagWhUpdateMask}}
+		req.Query = url.Values{webhookFieldUpdateMask: {flagWhUpdateMask}}
 	}
 	return runWebhookReq(req)
 }
@@ -419,7 +422,7 @@ func runSubscriptionsDelete(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	path := "/" + parent + webhookSubscribersSegment + flagWhSubscriberID + "/subscriptions/" + flagWhSubscriptionID
-	return runWebhookReq(&client.Request{Method: "DELETE", Path: path})
+	return runWebhookReq(&client.Request{Method: httpMethodDelete, Path: path})
 }
 
 // ─── verify (local connectivity check) ───────────────────────────
